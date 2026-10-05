@@ -3,7 +3,7 @@ export const MAX_QUEUE_FILES = 10;
 const checkIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m7.5 12 3 3 6-6"/></svg>';
 const labels = { pending: 'Waiting', rendering: 'Rendering', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled' };
 
-export function createRenderQueue(panel, onPreview) {
+export function createRenderQueue(panel, onPreview, onRepair, onRestore) {
   const list = panel.querySelector('#queue-list');
   const count = panel.querySelector('#queue-count');
   const summary = panel.querySelector('#queue-summary');
@@ -26,6 +26,16 @@ export function createRenderQueue(panel, onPreview) {
     else icon.textContent = String(job.index + 1).padStart(2, '0');
     row.querySelector('.queue-state').textContent = labels[job.status];
     row.querySelector('.queue-detail').textContent = job.detail || 'Ready to render.';
+    row.querySelector('.queue-repair-message').textContent = job.repairMessage || '';
+    row.querySelector('.queue-repair').disabled = blocked;
+    row.querySelector('.queue-restore').disabled = blocked;
+    row.querySelector('.queue-restore').hidden = !job.repaired;
+    const repaired = row.querySelector('.queue-repaired-download');
+    repaired.hidden = !job.repairedUrl;
+    if (job.repairedUrl) {
+      repaired.href = job.repairedUrl;
+      repaired.download = job.file.name.replace(/\.js$/i, '') + '_repaired.js';
+    } else repaired.removeAttribute('href');
     const preview = row.querySelector('.queue-preview');
     preview.disabled = blocked;
     preview.setAttribute('aria-label', 'Preview ' + job.file.name);
@@ -39,22 +49,26 @@ export function createRenderQueue(panel, onPreview) {
     refreshSummary();
   }
 
-  function release(job) {
+  function release(job, all = false) {
     if (job.downloadUrl) URL.revokeObjectURL(job.downloadUrl);
     job.downloadUrl = null;
+    if (all && job.repairedUrl) { URL.revokeObjectURL(job.repairedUrl); job.repairedUrl = null; }
   }
 
   return {
     replace(files) {
-      jobs.forEach(release);
+      jobs.forEach(job => release(job, true));
       list.replaceChildren();
       jobs = files.map((file, index) => {
         const row = document.createElement('li');
         row.className = 'queue-item';
-        row.innerHTML = '<span class="queue-icon"></span><div class="queue-content"><div class="queue-file-line"><strong class="queue-file"></strong><span class="queue-state"></span></div><p class="queue-detail"></p></div><div class="queue-actions"><button class="queue-preview" type="button">Preview</button><a class="queue-download" hidden>Download <span aria-hidden="true">↓</span></a></div>';
+        row.innerHTML = '<span class="queue-icon"></span><div class="queue-content"><div class="queue-file-line"><strong class="queue-file"></strong><span class="queue-state"></span></div><p class="queue-detail"></p><p class="queue-repair-message" aria-live="polite"></p></div><div class="queue-actions"><button class="queue-preview" type="button">Preview</button><button class="queue-repair" type="button">Auto Repair</button><a class="queue-repaired-download" hidden>Download repaired JS</a><button class="queue-restore" type="button" hidden>Restore original</button><a class="queue-download" hidden>Download <span aria-hidden="true">↓</span></a></div>';
         row.querySelector('.queue-file').textContent = file.name;
-        const job = { file, index, row, source: null, meta: null, status: 'pending', detail: '', downloadUrl: null, outputName: '', result: null };
+        const job = { file, index, row, source: null, meta: null, status: 'pending', detail: '', downloadUrl: null, outputName: '', result: null,
+          originalSource: null, repaired: false, repairedUrl: null, repairMessage: '' };
         row.querySelector('.queue-preview').addEventListener('click', () => { if (!blocked) void onPreview(job); });
+        row.querySelector('.queue-repair').addEventListener('click', () => { if (!blocked) void onRepair(job); });
+        row.querySelector('.queue-restore').addEventListener('click', () => { if (!blocked) void onRestore(job); });
         list.append(row);
         return job;
       });
@@ -73,7 +87,7 @@ export function createRenderQueue(panel, onPreview) {
     },
     setBlocked(value) {
       blocked = value;
-      list.querySelectorAll('.queue-preview').forEach(button => { button.disabled = value; });
+      list.querySelectorAll('button').forEach(button => { button.disabled = value; });
     },
     update,
   };

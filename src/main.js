@@ -2,6 +2,7 @@ import './style.css';
 import { makeFfmpegBridge } from './ffmpeg-renderer.js';
 import { BITRATE_PROFILES, getBitrateProfile, profileForDimensions, randomBitrate, bitrateInProfile, bitrateHasNonRoundKbps } from './bitrate-profiles.js';
 import { MAX_QUEUE_FILES, createRenderQueue, outputFileName, uniqueOutputName } from './render-queue.js';
+import { MAX_AI_SOURCE_BYTES, repairEndpoint, callRepairBackend, applyRepairEdits, validateAnimation } from './ai-repair.js';
 
 document.title = 'Canvas Video Studio';
 document.documentElement.lang = 'en';
@@ -37,6 +38,7 @@ document.querySelector('#app').innerHTML = [
   '<section class="job-panel" id="render-status" aria-live="polite"><div class="job-header"><div><p class="eyebrow">RENDER STATUS</p><h2 id="status">Ready to load an animation</h2></div><button id="cancel" class="secondary-button" disabled>Cancel render</button></div>',
   '<progress id="progress" aria-label="Render progress" value="0" max="100"></progress><div class="job-stats"><span id="frame-stat">0 frames</span><span id="speed-stat">—</span><span id="eta-stat">—</span></div><p id="encoding-details" class="field-note"></p><p id="repair-details" class="field-note" hidden></p><p id="message" class="job-message">For a quick first test, use 720p, 30 FPS, and a 2-second clip.</p><a id="download" class="download-link" hidden>Download video <span aria-hidden="true">↓</span></a></section>',
   '<section id="render-queue" class="queue-panel" aria-labelledby="queue-title" hidden><div class="queue-header"><div class="panel-title"><span class="section-number">03</span><h2 id="queue-title">Render queue</h2></div><span id="queue-count" class="step-chip"></span></div><p class="queue-note">Files render one at a time. If an animation fails, the next file starts automatically.</p><ol id="queue-list" class="queue-list"></ol><p id="queue-summary" class="queue-summary" role="status" aria-live="polite"></p></section>',
+  '<section class="ai-panel" aria-labelledby="ai-title"><div class="panel-title"><span class="section-number">04</span><h2 id="ai-title">AI Auto Repair · GPT-5.6 Sol</h2></div><p class="queue-note">Use Auto Repair on a file in the render queue. Repaired code is tested across the full animation before it becomes ready to render.</p><details id="ai-settings"><summary>AI repair connection</summary><div class="ai-fields"><label>AI backend URL<input id="ai-endpoint" type="url" placeholder="https://canvas-ai-repair.example.workers.dev" autocomplete="off"></label><label>Repair access code<input id="ai-token" type="password" placeholder="Your private repair access code" autocomplete="off" spellcheck="false"></label></div><button id="ai-check" class="secondary-button" type="button">Check backend</button><p id="ai-connection" class="field-note" aria-live="polite">Configure your backend to enable AI repair. Keep your OpenAI API key in the backend.</p></details><label class="ai-consent"><input id="ai-consent" type="checkbox">Allow the selected JavaScript file and error details to be sent to OpenAI through my backend for repair.</label><p class="field-note">Up to 250 KB per file and two AI requests per click. API usage is billed separately. The access code stays in this tab; only the backend URL is remembered. Your original file is kept. Review the preview before exporting.</p><p id="ai-status" class="field-note" aria-live="polite">AI repair is ready to configure.</p></section>',
   '<footer><span>JAVASCRIPT → CANVAS → MP4 / MOV</span><span>Keep this tab open while rendering.</span></footer>',
   '</main>',
 ].join('\n');
@@ -46,11 +48,11 @@ const state = {
   source: '', fileName: '', meta: null, preview: null, exporting: null,
   playing: false, raf: 0, time: 0, origin: 0, originTime: 0,
   drawing: false, pendingTime: null, loading: false, busy: false, cancelRequested: false, fileStream: null,
-  activeSettings: null, lastRenderBitrate: null, jobs: [], currentJob: null, preparing: null,
+  activeSettings: null, lastRenderBitrate: null, jobs: [], currentJob: null, preparing: null, repairing: null,
 };
-const queue = createRenderQueue($('render-queue'), job => loadPreview(job));
+const queue = createRenderQueue($('render-queue'), job => loadPreview(job), repairJob, restoreOriginal);
 
-function makeBridge(onEvent) {
+function makeBridge(onEvent, restricted = false) {
   const worker = new Worker(new URL('./render-worker.js', import.meta.url), { type: 'module' });
   const pending = new Map();
   let nextId = 1;
@@ -82,7 +84,7 @@ function makeBridge(onEvent) {
           this.dispose(new Error('The animation is not responding. Check your JavaScript and reload the file.'));
         }, timeout) : null;
         pending.set(id, { resolve, reject, timer });
-        try { worker.postMessage({ id, type, payload }, transfer); }
+        try { worker.postMessage({ id, type, payload: type === 'load' && restricted ? { ...payload, restricted: true } : payload }, transfer); }
         catch (error) { clearTimeout(timer); pending.delete(id); reject(error); }
       });
     },
@@ -120,7 +122,9 @@ function updateControls() {
   $('play').disabled = blocked || !state.meta;
   $('seek').disabled = blocked || !state.meta;
   $('cancel').disabled = !state.busy;
-  $('cancel').textContent = state.jobs.length > 1 ? 'Cancel queue' : 'Cancel render';
+  $('cancel').textContent = state.repairing ? 'Cancel repair' : state.jobs.length > 1 ? 'Cancel queue' : 'Cancel render';
+  for (const element of $('ai-settings').querySelectorAll('input, button')) element.disabled = blocked;
+  $('ai-consent').disabled = blocked;
   queue.setBlocked(blocked);
 }
 
@@ -274,6 +278,152 @@ async function jobSource(job) {
   return job.source;
 }
 
+function aiConnection() {
+  const endpoint = repairEndpoint($('ai-endpoint').value);
+  const token = $('ai-token').value;
+  if (token.length < 24) throw new Error('Enter your repair access code (at least 24 characters) in AI repair connection.');
+  return { endpoint, token };
+}
+
+function resetJobOutput(job) {
+  if (job.downloadUrl) URL.revokeObjectURL(job.downloadUrl);
+  job.downloadUrl = null;
+  job.result = null;
+  job.outputName = '';
+  job.status = 'pending';
+  clearDownload();
+}
+
+async function restoreOriginal(job) {
+  if (state.busy || state.loading || !job.repaired) return;
+  job.source = job.originalSource;
+  job.meta = null;
+  job.repaired = false;
+  if (job.repairedUrl) URL.revokeObjectURL(job.repairedUrl);
+  job.repairedUrl = null;
+  job.repairMessage = 'Original JavaScript restored.';
+  job.detail = 'Original source restored. Ready to render.';
+  resetJobOutput(job);
+  queue.update(job);
+  await loadPreview(job);
+}
+
+async function repairJob(job) {
+  if (state.busy || state.loading || !browserReady) return;
+  let connection, source, selected;
+  try {
+    connection = aiConnection();
+    if (!$('ai-consent').checked) throw new Error('Allow sending the selected file to OpenAI by checking the consent box in AI Auto Repair.');
+    source = await jobSource(job);
+    if (new TextEncoder().encode(source).length > MAX_AI_SOURCE_BYTES) throw new Error('AI repair supports files up to 250 KB. This file can still be rendered normally.');
+    const preferences = exportPreferences();
+    selected = { width: preferences.width, height: preferences.height, fps: preferences.fps };
+  } catch (error) {
+    $('ai-settings').open = true;
+    $('ai-status').textContent = error.message;
+    job.repairMessage = error.message;
+    queue.update(job);
+    return;
+  }
+  pause();
+  if (state.preview) state.preview.dispose();
+  state.preview = null;
+  state.drawing = false;
+  state.pendingTime = null;
+  const controller = new AbortController();
+  state.repairing = controller;
+  state.busy = true;
+  state.cancelRequested = false;
+  updateControls();
+  let committed = false;
+  const stage = text => {
+    job.repairMessage = text;
+    $('ai-status').textContent = job.file.name + ' · ' + text;
+    $('status').textContent = 'AI Auto Repair · ' + text;
+    queue.update(job);
+  };
+  const validate = (candidate, expectedMeta) => validateAnimation(candidate, job.file.name, selected, () => makeBridge(), {
+    signal: controller.signal, expectedMeta,
+    onProgress: ({ frame, total }) => {
+      $('progress').value = frame / total * 100;
+      $('frame-stat').textContent = frame + ' / ' + total + ' frames checked';
+    },
+  });
+  try {
+    $('progress').value = 0;
+    let diagnostic, expectedMeta = job.meta;
+    stage('Checking the full animation…');
+    try {
+      await validate(source);
+      stage('No runtime error found. Original source kept.');
+      return;
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+      if (error.animationMeta) expectedMeta = error.animationMeta;
+      diagnostic = error.message;
+      if (diagnostic.includes('30,000 frames') || diagnostic.includes('without imports or dynamic code')) throw error;
+    }
+    let candidate = source;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      if (controller.signal.aborted) throw new DOMException('Repair cancelled.', 'AbortError');
+      stage('Requesting GPT-5.6 Sol · attempt ' + attempt + ' / 2…');
+      const result = await callRepairBackend(connection.endpoint, connection.token, '/repair', {
+        source: candidate, fileName: job.file.name, error: diagnostic.slice(0, 4000), metadata: expectedMeta,
+      }, controller.signal);
+      if (!Array.isArray(result.edits) || !result.edits.length) throw new Error(result.summary || 'AI could not establish a repair.');
+      candidate = applyRepairEdits(candidate, result.edits);
+      stage('Validating the repaired animation…');
+      try {
+        const verified = await validate(candidate, expectedMeta);
+        if (controller.signal.aborted) throw new DOMException('Repair cancelled.', 'AbortError');
+        if (job.originalSource === null) job.originalSource = source;
+        if (job.repairedUrl) URL.revokeObjectURL(job.repairedUrl);
+        job.source = candidate;
+        job.meta = verified.meta;
+        job.repaired = true;
+        job.repairedUrl = URL.createObjectURL(new Blob([candidate], { type: 'text/javascript' }));
+        resetJobOutput(job);
+        job.detail = 'Repaired source ready. Preview the animation, then click Render to export.';
+        stage('Repair ready · ' + verified.frames + ' frames checked at ' + selected.width + ' × ' + selected.height + ', ' + selected.fps + ' FPS. ' + String(result.summary).slice(0, 2000));
+        committed = true;
+        break;
+      } catch (error) {
+        if (controller.signal.aborted || error.message.includes('changed animation metadata') || error.message.includes('without imports or dynamic code')) throw error;
+        diagnostic = error.message;
+        if (attempt === 2) throw new Error('Repair did not pass full animation validation. ' + diagnostic);
+      }
+    }
+  } catch (error) {
+    stage(controller.signal.aborted ? 'Repair cancelled. Original source kept.' : 'Repair failed · ' + error.message + ' Original source kept.');
+  } finally {
+    state.repairing = null;
+    state.busy = false;
+    state.cancelRequested = false;
+    updateControls();
+    // Restore a usable preview without modifying any original file on disk.
+    await loadPreview(job);
+    if (committed) $('status').textContent = 'AI repair ready to render';
+    $('ai-status').textContent = job.file.name + ' · ' + job.repairMessage;
+  }
+}
+
+try { $('ai-endpoint').value = localStorage.getItem('canvas-ai-backend') || ''; } catch { /* Storage is optional. */ }
+$('ai-endpoint').addEventListener('change', () => {
+  try { localStorage.setItem('canvas-ai-backend', $('ai-endpoint').value.trim()); } catch { /* Storage is optional. */ }
+});
+$('ai-check').addEventListener('click', async () => {
+  if (state.busy || state.loading) return;
+  try {
+    const connection = aiConnection();
+    $('ai-check').disabled = true;
+    $('ai-connection').textContent = 'Checking backend configuration…';
+    const result = await callRepairBackend(connection.endpoint, connection.token, '/health');
+    if (!result.ok) throw new Error('The backend is not ready.');
+    $('ai-connection').textContent = 'Backend connected · GPT-5.6 Sol configured. API access and billing are checked on the first repair.';
+  } catch (error) { $('ai-connection').textContent = error.message; }
+  finally { $('ai-check').disabled = state.busy || state.loading; }
+});
+
 async function loadPreview(job, initial = false) {
   if (state.busy || state.loading) return;
   pause();
@@ -294,7 +444,7 @@ async function loadPreview(job, initial = false) {
     if (!('OffscreenCanvas' in globalThis)) throw new Error('This browser does not support OffscreenCanvas.');
     state.source = await jobSource(job);
     state.fileName = job.file.name;
-    state.preview = makeBridge();
+    state.preview = makeBridge(undefined, job.repaired);
     state.meta = await state.preview.call('load', { source: state.source, fileName: state.fileName }, [], 15000);
     job.meta = state.meta;
     $('animation-title').textContent = state.meta.title;
@@ -447,7 +597,7 @@ async function prepareJob(job) {
   const source = await jobSource(job);
   checkCancelled();
   if (!job.meta) {
-    const bridge = makeBridge();
+    const bridge = makeBridge(undefined, job.repaired);
     state.preparing = bridge;
     try { job.meta = await bridge.call('load', { source, fileName: job.file.name }, [], 15000); }
     finally {
@@ -509,7 +659,7 @@ async function renderJob(job, preferences, bitrate, directory, diskNames) {
       throw new Error('The estimated FFmpeg output exceeds 500 MB. Reduce the duration or select a lower-resolution bitrate mode.');
     }
     checkCancelled();
-    const exporter = makeFfmpegBridge(makeBridge, data => {
+    const exporter = makeFfmpegBridge(() => makeBridge(undefined, job.repaired), data => {
       if (state.exporting === exporter) onProgress(data, job);
     });
     state.exporting = exporter;
@@ -674,6 +824,7 @@ $('settings').addEventListener('submit', async (event) => {
 $('cancel').addEventListener('click', () => {
   if (!state.busy) return;
   state.cancelRequested = true;
+  if (state.repairing) state.repairing.abort();
   if (state.preparing) state.preparing.dispose();
   if (state.exporting) state.exporting.dispose();
   $('cancel').disabled = true;

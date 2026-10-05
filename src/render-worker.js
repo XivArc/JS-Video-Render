@@ -56,6 +56,17 @@ async function loadAnimation(source, fileName) {
   return metadata;
 }
 
+function restrictAnimationIO(source) {
+  if (/\bimport\s*(?:\(|['"{*]|[A-Za-z_$])|\bexport\s+(?:\*|\{[^}]*\})\s*from\s*['"]|\b(?:eval|Function|importScripts)\s*\(/.test(source)) {
+    throw new Error('AI repair supports self-contained Canvas JavaScript without imports or dynamic code execution.');
+  }
+  const blocked = () => { throw new Error('Network access is disabled for AI-repaired animations.'); };
+  for (const name of ['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'Worker', 'SharedWorker', 'importScripts']) {
+    if (!Object.getOwnPropertyDescriptor(globalThis, name)?.configurable && name in globalThis) continue;
+    Object.defineProperty(globalThis, name, { value: blocked, writable: false, configurable: false });
+  }
+}
+
 function paint(canvas, time) {
   if (!animation) throw new Error('Load an animation file first.');
   const ctx = canvas.getContext('2d', { alpha: false });
@@ -153,6 +164,7 @@ self.onmessage = async ({ data }) => {
   const { id, type, payload = {} } = data;
   try {
     if (type === 'load') {
+      if (payload.restricted) restrictAnimationIO(payload.source);
       self.postMessage({ id, ok: true, result: await loadAnimation(payload.source, payload.fileName) });
     } else if (type === 'draw') {
       const { width, height, time } = payload;
@@ -175,6 +187,19 @@ self.onmessage = async ({ data }) => {
       const blob = await previewCanvas.convertToBlob({ type: 'image/png' });
       const buffer = await blob.arrayBuffer();
       self.postMessage({ id, ok: true, result: { buffer, canvasRepair: canvasRepair.report() } }, [buffer]);
+    } else if (type === 'validate-frames') {
+      const { width, height, fps, start, count, total } = payload;
+      if (![width, height, fps, start, count, total].every(Number.isInteger) || width < 16 || height < 16 ||
+          width > 4096 || height > 4096 || ![24, 25, 30, 50, 60].includes(fps) ||
+          start < 0 || count < 1 || count > 16 || start + count > total || total > 30000) {
+        throw new Error('Invalid full animation validation settings.');
+      }
+      if (!previewCanvas || previewCanvas.width !== width || previewCanvas.height !== height) previewCanvas = new OffscreenCanvas(width, height);
+      for (let frame = start; frame < start + count; frame++) {
+        try { paint(previewCanvas, frame / fps); }
+        catch (error) { error.message = 'Frame ' + (frame + 1) + ' / ' + total + ' · ' + error.message; throw error; }
+      }
+      self.postMessage({ id, ok: true, result: { frame: start + count, total } });
     } else if (type === 'check') {
       await codecConfig(validate(payload.settings));
       self.postMessage({ id, ok: true, result: { supported: true } });
