@@ -1,0 +1,62 @@
+name: Render video in cloud
+run-name: 'Cloud render · ${{ inputs.job_file }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_file:
+        description: 'Job JSON path, for example cloud/jobs/cloud-123.json'
+        required: true
+        default: 'cloud/jobs/example-job.json'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-video-render
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Check out the selected branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+
+      - name: Install native FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install the cloud renderer
+        working-directory: cloud
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: cloud
+        run: npx playwright install --with-deps chromium
+
+      - name: Render and verify videos
+        working-directory: cloud
+        env:
+          CLOUD_JOB_FILE: ${{ inputs.job_file }}
+        run: npm run render
+
+      - name: Save videos and benchmark report for 3 days
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rendered-videos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: cloud-output/
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: warn
