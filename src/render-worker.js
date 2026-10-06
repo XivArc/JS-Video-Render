@@ -3,6 +3,7 @@ import {
   Mp4OutputFormat, MovOutputFormat, canEncodeVideo,
 } from 'mediabunny';
 import { installCanvasAutoRepair } from './canvas-auto-repair.js';
+import { animationTime, validateDuration } from './duration-settings.js';
 
 let animation;
 let metadata;
@@ -114,7 +115,7 @@ async function codecConfig(s) {
 async function exportVideo(id, source, settings, stream, fileName) {
   const s = validate(settings);
   await loadAnimation(source, fileName);
-  if (s.duration > metadata.duration + 0.00001) throw new Error('The export duration exceeds the animation duration.');
+  validateDuration(metadata.duration, s);
   const config = await codecConfig(s);
   const canvas = new OffscreenCanvas(s.width, s.height);
   const target = stream ? new StreamTarget(stream, { chunked: true, chunkSize: 4 * 1024 * 1024 }) : new BufferTarget();
@@ -134,7 +135,7 @@ async function exportVideo(id, source, settings, stream, fileName) {
   try {
     await output.start();
     for (let i = 0; i < total; i++) {
-      paint(canvas, i / s.fps);
+      paint(canvas, animationTime(i / s.fps, metadata.duration, s));
       await video.add(i / s.fps, 1 / s.fps);
       if (i % 8 === 0 || i === total - 1) {
         const elapsed = (performance.now() - started) / 1000;

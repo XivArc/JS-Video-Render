@@ -3,6 +3,7 @@ import { makeFfmpegBridge } from './ffmpeg-renderer.js';
 import { BITRATE_PROFILES, getBitrateProfile, profileForDimensions, randomBitrate, bitrateInProfile, bitrateHasNonRoundKbps } from './bitrate-profiles.js';
 import { MAX_QUEUE_FILES, createRenderQueue, outputFileName, uniqueOutputName } from './render-queue.js';
 import { MAX_AI_SOURCE_BYTES, repairEndpoint, callRepairBackend, applyRepairEdits, validateAnimation } from './ai-repair.js';
+import { FIXED_DURATIONS, durationSettings, animationTime } from './duration-settings.js';
 
 document.title = 'Canvas Video Studio';
 document.documentElement.lang = 'en';
@@ -11,6 +12,8 @@ const uploadIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 const fileIcon = '<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M19 3H8a2 2 0 0 0-2 2v22a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V10L19 3Zm0 0v7h7M12 16l-3 3 3 3m8-6 3 3-3 3m-3-7-2 10"/></svg>';
 const bitrateOptions = Object.values(BITRATE_PROFILES).map((profile) =>
   '<option value="' + profile.id + '"' + (profile.id === '1080p' ? ' selected' : '') + '>Auto Random · ' + profile.label + ' · ' + profile.minMbps + '–' + profile.maxMbps + ' Mbps</option>').join('');
+const durationOptions = FIXED_DURATIONS.map(seconds =>
+  '<option value="' + seconds + '">' + seconds + ' seconds</option>').join('');
 
 document.querySelector('#app').innerHTML = [
   '<main class="studio" id="top">',
@@ -26,7 +29,7 @@ document.querySelector('#app').innerHTML = [
   '<p id="canvas-repair-note" class="field-note">Canvas auto-repair is on. Coordinate arrays and point objects are unpacked automatically.</p>',
   '<form id="settings"><label>Render engine<select id="engine"><option value="ffmpeg">FFmpeg · verified bitrate</option><option value="webcodecs" disabled>WebCodecs · bitrate not guaranteed</option></select></label><p id="engine-note" class="field-note"></p><div class="field-row"><label>Format<select id="format"><option value="mp4">MP4 · H.264</option><option value="mov">MOV · H.264</option></select></label><label>Frame rate<select id="fps"><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="24">24 FPS</option><option value="25">25 FPS</option><option value="50">50 FPS</option></select></label></div>',
   '<label>Resolution<select id="resolution"><option value="3840x2160">4K · 3840 × 2160</option><option value="2560x1440">2K · 2560 × 1440</option><option value="1920x1080" selected>FHD · 1920 × 1080</option><option value="1280x720">HD · 1280 × 720</option><option value="native" disabled>Original resolution</option></select></label>',
-  '<label>Duration<select id="duration"><option value="full">Full animation</option><option value="2">Quick test · 2 seconds</option><option value="5">Quick test · 5 seconds</option></select></label>',
+  '<label>Duration<select id="duration" aria-describedby="duration-note"><option value="full">Full animation · original duration</option>' + durationOptions + '<option value="2">Quick test · 2 seconds</option><option value="5">Quick test · 5 seconds</option></select></label><p id="duration-note" class="field-note">Full animation uses each file’s original duration.</p>',
   '<label>Bitrate mode<select id="bitrate-mode">' + bitrateOptions + '</select></label>',
   '<label>Target bitrate<div class="bitrate-field"><input id="bitrate" type="number" min="40" max="51" step="0.001" value="45.123" required readonly aria-label="Target bitrate in Mbps"><span>Mbps</span><button id="random-bitrate" type="button" title="Pick a new target within the selected range">Randomize</button></div></label>',
   '<p id="bitrate-mode-note" class="field-note"></p>',
@@ -145,12 +148,10 @@ function exportPreferences() {
 }
 
 function settingsFor(meta, preferences, bitrate = preferences.bitrate) {
-  const duration = preferences.durationChoice === 'full' ? meta.duration :
-    Math.min(meta.duration, Number(preferences.durationChoice));
   return {
     format: preferences.format, width: preferences.width, height: preferences.height, fps: preferences.fps,
     engine: preferences.engine, bitrateMode: preferences.bitrateMode, bitrate,
-    duration: Math.floor(duration * preferences.fps + 0.000001) / preferences.fps,
+    ...durationSettings(meta.duration, preferences.durationChoice, preferences.fps),
   };
 }
 
@@ -213,6 +214,31 @@ function pause() {
   $('play').textContent = '▶';
 }
 
+function previewTiming() {
+  return durationSettings(state.meta.duration, $('duration').value, Number($('fps').value));
+}
+
+function updateDurationNote() {
+  const choice = $('duration').value;
+  if (choice === 'full') {
+    $('duration-note').textContent = 'Full animation uses each file’s original duration.';
+  } else if (FIXED_DURATIONS.includes(Number(choice))) {
+    const speed = state.meta ? ' · ' + (state.meta.duration / Number(choice)).toFixed(2) + '× speed' : '';
+    $('duration-note').textContent = 'Full animation fitted to ' + choice + ' seconds' + speed + '. Preview uses the same timing. Applies to every file in the queue.';
+  } else {
+    $('duration-note').textContent = 'Export only the first ' + choice + ' seconds, up to the file’s original duration. Preview uses the same timing.';
+  }
+}
+
+function updatePreviewTiming() {
+  updateDurationNote();
+  updateEstimate();
+  if (!state.meta || !state.preview) return;
+  pause();
+  $('seek').max = previewTiming().duration;
+  void draw(0);
+}
+
 async function draw(time) {
   if (!state.preview || !state.meta) return;
   if (state.drawing) { state.pendingTime = time; return; }
@@ -221,7 +247,10 @@ async function draw(time) {
   const width = Math.min(960, Math.round(540 * state.meta.width / state.meta.height));
   const height = Math.round(width * state.meta.height / state.meta.width);
   try {
-    const { bitmap, canvasRepair } = await bridge.call('draw', { width, height, time }, [], 10000);
+    const timing = previewTiming();
+    time = Math.max(0, Math.min(timing.duration, time));
+    const sourceTime = animationTime(time, state.meta.duration, timing);
+    const { bitmap, canvasRepair } = await bridge.call('draw', { width, height, time: sourceTime }, [], 10000);
     if (bridge !== state.preview) { bitmap.close(); return; }
     const canvas = $('preview');
     if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
@@ -231,7 +260,7 @@ async function draw(time) {
       'Canvas auto-repair is on. Coordinate arrays and point objects are unpacked automatically.';
     state.time = time;
     $('seek').value = time;
-    $('time').textContent = time.toFixed(2) + ' / ' + state.meta.duration.toFixed(2) + ' s';
+    $('time').textContent = time.toFixed(2) + ' / ' + timing.duration.toFixed(2) + ' s';
     return true;
   } catch (error) {
     if (bridge === state.preview && error.name !== 'AbortError') {
@@ -253,9 +282,10 @@ async function draw(time) {
 
 function tick(now) {
   if (!state.playing || !state.meta) return;
-  const time = Math.min(state.meta.duration, state.originTime + (now - state.origin) / 1000);
+  const duration = previewTiming().duration;
+  const time = Math.min(duration, state.originTime + (now - state.origin) / 1000);
   if (!state.drawing) void draw(time);
-  if (time >= state.meta.duration) { pause(); void draw(state.meta.duration); return; }
+  if (time >= duration) { pause(); void draw(duration); return; }
   state.raf = requestAnimationFrame(tick);
 }
 
@@ -453,9 +483,10 @@ async function loadPreview(job, initial = false) {
     $('source-badge').textContent = state.jobs.length > 1 ? 'Preview · ' + job.file.name : 'File loaded';
     $('source-badge').classList.add('loaded');
     $('empty-state').hidden = true;
-    $('seek').max = state.meta.duration;
     if (initial) $('fps').value = ['24', '25', '30', '50', '60'].includes(String(state.meta.fps)) ?
       String(state.meta.fps) : '30';
+    $('seek').max = previewTiming().duration;
+    updateDurationNote();
     const nativeProfile = profileForDimensions(state.meta.width, state.meta.height);
     $('resolution').querySelector('[value="native"]').disabled = state.jobs.length > 1 || !nativeProfile;
     if (initial) {
@@ -464,9 +495,9 @@ async function loadPreview(job, initial = false) {
     }
     $('stage').style.aspectRatio = state.meta.width + ' / ' + state.meta.height;
     $('status').textContent = state.jobs.length > 1 ? state.jobs.length + ' files ready to render' : 'Animation ready to export';
-    setMessage(state.jobs.length > 1 ? 'One set of export settings applies to every file. Full animation uses each file’s own duration. Choose Render ' + state.jobs.length + ' videos to start the queue.' : 'The preview uses a lower resolution. Your video uses the export settings. For a quick test, choose FFmpeg, 720p, 30 FPS, and 2 seconds.');
+    setMessage(state.jobs.length > 1 ? 'One set of export settings applies to every file. Choose a fixed duration to fit each full animation to the same length. Choose Render ' + state.jobs.length + ' videos to start the queue.' : 'The preview uses a lower resolution and follows your selected duration. Your video uses the export settings. For a quick test, choose FFmpeg, 720p, 30 FPS, and 2 seconds.');
     updateEngineNotes();
-    const drawn = await draw(Math.min(2, state.meta.duration));
+    const drawn = await draw(Math.min(2, previewTiming().duration));
     if (!drawn && job.status === 'pending') {
       job.detail = 'Preview error · ' + $('message').textContent + ' The queue will attempt this file and continue if it fails.';
       queue.update(job);
@@ -514,7 +545,7 @@ $('file').addEventListener('change', async (event) => {
 
 $('play').addEventListener('click', () => {
   if (state.playing) { pause(); return; }
-  if (state.time >= state.meta.duration) state.time = 0;
+  if (state.time >= previewTiming().duration) state.time = 0;
   state.originTime = state.time;
   state.origin = performance.now();
   state.playing = true;
@@ -545,6 +576,8 @@ $('settings').addEventListener('input', updateEstimate);
 $('engine').addEventListener('change', updateEngineNotes);
 $('bitrate-mode').addEventListener('change', () => updateBitrateMode());
 $('resolution').addEventListener('change', updateResolutionMode);
+$('duration').addEventListener('change', updatePreviewTiming);
+$('fps').addEventListener('change', updatePreviewTiming);
 $('random-bitrate').addEventListener('click', randomizeBitrate);
 
 function renderStatus(text, job = state.currentJob) {

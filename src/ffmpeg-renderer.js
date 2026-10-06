@@ -3,6 +3,7 @@ import { Input, BufferSource, MP4, QTFF } from 'mediabunny';
 import coreScript from '@ffmpeg/core?url';
 import coreWasm from '@ffmpeg/core/wasm?url';
 import { getBitrateProfile, bitrateInProfile, bitrateHasNonRoundKbps, randomBitrate } from './bitrate-profiles.js';
+import { animationTime, validateDuration } from './duration-settings.js';
 
 const MAX_OUTPUT_BYTES = 500_000_000;
 const MAX_WORKING_FILES_BYTES = 600_000_000;
@@ -46,7 +47,7 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
       }
       canvasBridge = makeCanvasBridge();
       const meta = await canvasBridge.call('load', { source, fileName }, [], 15_000);
-      if (s.duration > meta.duration + 0.00001) throw new Error('The export duration exceeds the animation duration.');
+      validateDuration(meta.duration, s);
       checkCancelled();
       emit({ event: 'phase', phase: 'loading', message: 'Loading the local video encoder…' });
       ffmpeg = new FFmpeg();
@@ -87,7 +88,7 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
       for (let i = 0; i < total; i++) {
         checkCancelled();
         const result = await canvasBridge.call('png', {
-          width: s.width, height: s.height, time: i / s.fps,
+          width: s.width, height: s.height, time: animationTime(i / s.fps, meta.duration, s),
         }, [], 60_000).catch(error => {
           if (error.name === 'AbortError') throw error;
           const failure = new Error('Frame ' + (i + 1) + ' / ' + total + ' · ' + error.message, { cause: error });
