@@ -11,7 +11,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: cloud-video-render
@@ -50,6 +50,14 @@ jobs:
         env:
           CLOUD_JOB_FILE: ${{ inputs.job_file }}
         run: npm run render
+
+      - name: Publish result report to website
+        if: always()
+        continue-on-error: true
+        working-directory: cloud
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node publish-report.mjs
 
       - name: Save videos and benchmark report for 3 days
         if: always()
