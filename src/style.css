@@ -216,6 +216,15 @@ progress::-moz-progress-bar { background: linear-gradient(90deg, #9945ff, #00a8f
 @keyframes queue-spin { to { transform: rotate(360deg); } }
 footer { display: flex; justify-content: space-between; gap: 20px; font-size: 12px; color: #8d829c; padding: 28px 0 36px; }
 .ai-panel { margin-top: 24px; padding: 25px; border: 1px solid #393045; border-radius: 10px; background: rgba(21, 18, 27, .9); }
+.cloud-panel { margin-top: 24px; padding: 25px; border: 1px solid #393045; border-radius: 10px; background: rgba(21, 18, 27, .9); }
+.cloud-panel h2 { line-height: 1.5; }
+.cloud-panel p, .cloud-panel ol { color: #b7a9c6; line-height: 1.6; }
+.cloud-panel ol { padding-left: 22px; }
+.cloud-panel li { margin: 6px 0; }
+.cloud-panel #cloud-job-info { overflow-wrap: anywhere; }
+.cloud-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 18px 0; }
+.cloud-actions .download-link { margin: 0; }
+@media (max-width: 540px) { .cloud-panel { padding: 20px 16px; } }
 .ai-panel h2 { line-height: 1.5; }
 .ai-panel details { margin: 15px 0; border-top: 1px solid #393045; padding-top: 14px; }
 .ai-panel summary { cursor: pointer; color: #c6a7e8; font-size: 15px; }

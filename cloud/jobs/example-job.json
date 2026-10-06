@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "id": "cloud-example",
+  "settings": {
+    "format": "mp4",
+    "fps": 30,
+    "durationChoice": "full",
+    "bitrateMode": "720p"
+  },
+  "files": [
+    {
+      "fileName": "cloud_benchmark.js",
+      "source": "module.exports = {\n meta: {width:1280,height:720,fps:30,duration:2,title:\"Cloud Render Benchmark\"},\n render(ctx,t,w,h) {\n  const p=t/2; const ease=p*p*(3-2*p);\n  ctx.fillStyle=\"#111322\"; ctx.fillRect(0,0,w,h);\n  ctx.fillStyle=\"#d9cdf0\"; ctx.font=\"bold \"+w/24+\"px sans-serif\"; ctx.textAlign=\"center\";\n  ctx.fillText(\"CLOUD RENDER BENCHMARK\",w/2,h*.35);\n  ctx.fillStyle=\"#29243a\"; ctx.fillRect(w*.15,h*.5,w*.7,h*.05);\n  ctx.fillStyle=\"#9955ff\"; ctx.fillRect(w*.15,h*.5,w*.7*ease,h*.05);\n  ctx.beginPath(); ctx.arc(w*.15+w*.7*ease,h*.7,h*.04,0,Math.PI*2); ctx.fillStyle=\"#55ddcc\"; ctx.fill();\n }\n};",
+      "bitrate": 24813000
+    }
+  ]
+}

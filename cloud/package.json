@@ -1,0 +1,9 @@
+{
+  "name": "canvas-video-cloud-renderer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": { "render": "node render.mjs" },
+  "dependencies": { "playwright": "1.62.1" }
+}

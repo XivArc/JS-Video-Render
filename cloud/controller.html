@@ -1,0 +1,41 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Cloud frame generator</title><script>
+let worker, nextId = 1, requests = new Map(), controller;
+const stop = () => {
+  worker?.terminate(); worker = null; controller?.abort();
+  for (const request of requests.values()) { clearTimeout(request.timer); request.reject(new Error('Cloud frame generator stopped.')); }
+  requests.clear();
+};
+const call = (type, payload) => new Promise((resolve, reject) => {
+  const id = nextId++;
+  const timer = setTimeout(() => stop(), 30000);
+  requests.set(id, { resolve, reject, timer });
+  worker.postMessage({ id, type, payload });
+});
+window.loadAnimation = async (source, fileName) => {
+  stop(); controller = new AbortController();
+  worker = new Worker('/cloud/canvas-worker.js', { type: 'module' });
+  worker.onmessage = ({ data }) => {
+    const request = requests.get(data.id); if (!request) return;
+    clearTimeout(request.timer); requests.delete(data.id);
+    if (data.ok) request.resolve(data.result);
+    else request.reject(new Error(data.error.message));
+  };
+  worker.onerror = () => stop();
+  return call('load', { source, fileName });
+};
+window.streamFrames = async (settings, token) => {
+  const started = performance.now(); let drawingMs = 0, report;
+  const total = Math.round(settings.duration * settings.fps);
+  for (let frame = 0; frame < total; frame++) {
+    const drawStarted = performance.now();
+    const result = await call('frame', { ...settings, frame });
+    drawingMs += performance.now() - drawStarted;
+    report = result.canvasRepair;
+    const response = await fetch('/frame', { method: 'POST', headers: { 'X-Cloud-Token': token, 'X-Frame-Index': String(frame) },
+      body: result.buffer, signal: controller.signal });
+    if (!response.ok) throw new Error('Unable to stream frame ' + (frame + 1) + ': ' + await response.text());
+  }
+  return { frames: total, drawingSeconds: drawingMs / 1000, streamingSeconds: (performance.now() - started) / 1000, canvasRepair: report };
+};
+window.stopAnimation = stop;
+</script></html>
