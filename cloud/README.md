@@ -7,18 +7,31 @@ duration, and the selected Auto Random bitrate range with ffprobe. It does not
 use a dedicated GPU or FFmpeg.wasm.
 
 For the existing XivArc/JS-Video-Render website, follow
-`../CLOUD_RENDER_SETUP_ID.txt`. Commit this directory, the complete `src`
+`../SIMPLE_CLOUD_SETUP_ID.txt`. Commit this directory, the complete `src`
 directory, and `../.github/workflows/render-cloud.yml` to `main`. Test the
 workflow with its default input `cloud/jobs/example-job.json` first.
 
-## Prepare and run a job
+## Connect once, then drop and render
 
-Choose **Render location → GitHub Cloud · Actions** in the website, select
-animations and settings, then click **Prepare cloud job** and download the JSON.
-Upload that JSON to `cloud/jobs/` and commit it. In GitHub Actions, open
-**Render video in cloud → Run workflow**, choose `main`, and supply the exact
-repository-relative JSON path. Preparing a package does not start a workflow.
-No GitHub token or OpenAI API key is required by this flow.
+Create a fine-grained GitHub token restricted to this repository with Contents
+and Actions set to Read and write. Connect it in the website. Remember is
+optional and stores the token in this browser; otherwise it stays in the tab.
+Drop 1–10 Canvas JS files, choose settings, and click Render. The website
+uploads `cloud/jobs/<unique-id>.json` and dispatches this workflow on main.
+It tracks the returned run ID, or resolves a lost response by the unique
+run title without automatically dispatching twice. Reopen the website to
+restore jobs and retrieve final results. No AI or separate backend is required.
+
+The result publisher step receives GITHUB_TOKEN after rendering and commits
+only the small report to `cloud/results/<job-id>.json` with run ID/attempt.
+Checkout does not persist credentials, and the renderer step is not given the
+publishing token. Workflow Contents write permission is required for reports.
+Publishing errors do not hide completed Artifact downloads. The website only
+marks files successful or failed when a matching report establishes the result.
+Real workflow phases are polled; per-frame progress is still available in logs.
+
+For diagnostics, Actions can still run the provided `cloud/jobs/example-job.json`
+manually. The website flow handles ordinary jobs without manual JSON uploads.
 
 The job format has `version: 1`, an identifier, `settings` (format, FPS, duration
 choice, and bitrate mode), and `files` (filename, full JavaScript source, and
@@ -59,7 +72,8 @@ The engine writes videos, `report.json`, and `summary.md` into `cloud-output/`.
 The workflow uploads those as Artifacts even when some sources fail, retaining
 them for **3 days**. A run fails overall if any source fails. Download completed
 videos before retention expires; nothing is automatically written to a laptop
-while it is off. The website's local queue does not synchronize cloud progress.
+while it is off. Recent cloud jobs shows workflow phases and final file results.
+The current tab's selected queue also receives those final results.
 
 The Actions summary shows a green/red result for each file and measured bitrate.
 `pipelineFPS` measures frames divided by time spent drawing, streaming, and
@@ -75,7 +89,7 @@ workflows at once can replace older pending runs.
 
 ## Source visibility and retention
 
-Uploaded job JSON is committed source code and remains in Git history. Public
+Uploaded job JSON and small result reports are committed and remain in Git history. Public
 repository jobs are public. Deleting a JSON file later does not erase its history.
 Videos are stored as temporary Artifacts, not committed to the repository.
 Short retention does not guarantee usage stays within an account's allowance.

@@ -141,6 +141,7 @@ input[type='range'] { accent-color: #a369ef; min-width: 30px; flex: 1; height: 4
 .step-chip { color: #ab9cbd; background: #24212b; border: 1px solid #38313f; border-radius: 4px; padding: 3px 6px; font-size: 11px; }
 .upload-zone { position: relative; border: 1px dashed #554269; border-radius: 10px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 5px; padding: 22px 13px; cursor: pointer; background: linear-gradient(135deg, rgba(153, 69, 255, .065), rgba(0, 168, 255, .025)); margin-bottom: 23px; transition: border-color .2s, background .2s; overflow: hidden; }
 .upload-zone:hover { border-color: #a467ee; background: rgba(153, 69, 255, .09); }
+.upload-zone.drop-active { border: 2px solid var(--cyan); background: rgba(0, 255, 255, .08); box-shadow: 0 0 28px rgba(0, 255, 255, .12); }
 .upload-zone:focus-within { outline: 2px solid var(--cyan); outline-offset: 4px; }
 .upload-zone.disabled { cursor: default; opacity: .5; }
 .upload-icon { display: block; width: 25px; height: 25px; color: #c69aff; margin-bottom: 6px; }
@@ -219,12 +220,34 @@ footer { display: flex; justify-content: space-between; gap: 20px; font-size: 12
 .cloud-panel { margin-top: 24px; padding: 25px; border: 1px solid #393045; border-radius: 10px; background: rgba(21, 18, 27, .9); }
 .cloud-panel h2 { line-height: 1.5; }
 .cloud-panel p, .cloud-panel ol { color: #b7a9c6; line-height: 1.6; }
-.cloud-panel ol { padding-left: 22px; }
-.cloud-panel li { margin: 6px 0; }
-.cloud-panel #cloud-job-info { overflow-wrap: anywhere; }
+.cloud-connection { padding: 12px 15px; border-left: 3px solid var(--cyan); background: rgba(0, 255, 255, .04); border-radius: 5px; overflow-wrap: anywhere; }
+.cloud-panel details { border: 1px solid #393045; border-radius: 8px; padding: 14px 16px; }
+.cloud-panel summary { cursor: pointer; color: #eee6ff; font-weight: 600; }
+.github-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 16px; margin-top: 18px; }
+.github-fields label { display: block; color: #beb1ce; font-size: 14px; }
+.github-fields input { display: block; width: 100%; margin-top: 8px; min-width: 0; padding: 10px 12px; color: #e4d9ee; background: #100d16; border: 1px solid #4a385c; border-radius: 6px; font-family: inherit; }
+.github-remember { display: flex; align-items: center; gap: 10px; margin: 18px 0 10px; color: #beb1ce; }
+.github-remember input { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--cyan); }
+.cloud-jobs-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 25px; }
+.cloud-jobs-heading h3 { font-size: 18px; margin: 0; }
+.cloud-panel .cloud-jobs { list-style: none; padding: 0; margin: 18px 0; }
+.cloud-job { border: 1px solid #393045; border-radius: 8px; padding: 18px; margin: 12px 0; min-width: 0; }
+.cloud-job-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.cloud-job-header strong { color: #f0e7ff; }
+.cloud-job-header .muted { font-size: 12px; }
+.cloud-job p, .cloud-results strong, .cloud-results span { overflow-wrap: anywhere; }
+.cloud-job-error { color: #ff8a9b !important; }
+.cloud-results { list-style: none; padding: 0; margin: 15px 0; }
+.cloud-results li { display: flex; flex-direction: column; gap: 3px; padding: 10px 0; border-top: 1px solid #302638; }
+.cloud-results li[data-status="completed"] strong { color: #7aedac; }
+.cloud-results li[data-status="failed"] strong { color: #ff8498; }
+.cloud-results span { font-size: 13px; color: #b7a9c6; }
+.cloud-hide { border: none; background: none; color: #ad9cbd; text-decoration: underline; cursor: pointer; padding: 10px 8px; }
+.cloud-footnote { border-top: 1px solid #302638; padding-top: 16px; }
 .cloud-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 18px 0; }
 .cloud-actions .download-link { margin: 0; }
-@media (max-width: 540px) { .cloud-panel { padding: 20px 16px; } }
+@media (max-width: 860px) { .github-fields { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 540px) { .cloud-panel { padding: 20px 16px; } .cloud-job { padding: 14px; } .cloud-jobs-heading { align-items: flex-start; } }
 .ai-panel h2 { line-height: 1.5; }
 .ai-panel details { margin: 15px 0; border-top: 1px solid #393045; padding-top: 14px; }
 .ai-panel summary { cursor: pointer; color: #c6a7e8; font-size: 15px; }

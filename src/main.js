@@ -4,7 +4,7 @@ import { BITRATE_PROFILES, getBitrateProfile, profileForDimensions, randomBitrat
 import { MAX_QUEUE_FILES, createRenderQueue, outputFileName, uniqueOutputName } from './render-queue.js';
 import { MAX_AI_SOURCE_BYTES, repairEndpoint, callRepairBackend, applyRepairEdits, validateAnimation } from './ai-repair.js';
 import { FIXED_DURATIONS, durationSettings, animationTime } from './duration-settings.js';
-import { createCloudJob, CLOUD_ACTIONS_URL, CLOUD_UPLOAD_URL } from './cloud-job.js';
+import { CLOUD_PANEL_HTML, makeCloudControls } from './cloud-controls.js';
 
 document.title = 'Canvas Video Studio';
 document.documentElement.lang = 'en';
@@ -19,16 +19,16 @@ const durationOptions = FIXED_DURATIONS.map(seconds =>
 document.querySelector('#app').innerHTML = [
   '<main class="studio" id="top">',
   '<header class="topbar"><a class="brand" href="#top" aria-label="Canvas Video Studio home"><span class="brand-mark" aria-hidden="true"><i></i></span><span class="brand-name"><strong>CANVAS</strong><span>VIDEO STUDIO</span></span></a><nav class="nav-links" aria-label="Studio navigation"><a href="#workspace">Studio</a><a href="#export-settings">Export</a><a href="#render-status">Status</a></nav><span class="local-badge"><i></i>Runs on your device</span></header>',
-  '<section class="intro"><div class="intro-content"><p class="eyebrow"><span class="eyebrow-line"></span>YOUR BROWSER. YOUR RENDER ENGINE.</p><h1>TURN CODE<br>INTO <span>MOTION.</span></h1><p class="intro-copy">Transform your JavaScript animations into crisp, smooth video. Preview, customize, and export on your device, or prepare a job for GitHub Cloud.</p><div class="feature-tags"><span>MP4 &amp; MOV</span><span>UP TO 4K</span><span>60 FPS</span></div></div><div class="prism-art" aria-hidden="true"><div class="prism-orbit orbit-one"></div><div class="prism-orbit orbit-two"></div><svg viewBox="0 0 300 270" fill="none"><defs><linearGradient id="prism-gradient" x1="30" y1="20" x2="260" y2="230" gradientUnits="userSpaceOnUse"><stop stop-color="#00ffff"/><stop offset="0.5" stop-color="#00a8ff"/><stop offset="1" stop-color="#9945ff"/></linearGradient></defs><path d="M150 22 259 85 259 211 150 251 41 211 41 85 150 22Z" fill="url(#prism-gradient)" fill-opacity=".05" stroke="url(#prism-gradient)"/><path d="m150 22 55 94-55 135-55-135 55-94Zm-109 63 109 34 109-34M41 211l109-92 109 92M95 116l55 3 55-3" stroke="url(#prism-gradient)" stroke-width="1.5"/><path d="M150 72 184 131 150 184 116 131 150 72Z" fill="url(#prism-gradient)" fill-opacity=".2" stroke="url(#prism-gradient)"/></svg><span class="prism-caption">CREATE / RENDER / EXPORT</span></div></section>',
+  '<section class="intro"><div class="intro-content"><p class="eyebrow"><span class="eyebrow-line"></span>YOUR BROWSER. YOUR RENDER ENGINE.</p><h1>TURN CODE<br>INTO <span>MOTION.</span></h1><p class="intro-copy">Transform your JavaScript animations into crisp, smooth video. Drop your animation files, choose your settings, and render in GitHub Cloud or on your device.</p><div class="feature-tags"><span>MP4 &amp; MOV</span><span>UP TO 4K</span><span>60 FPS</span></div></div><div class="prism-art" aria-hidden="true"><div class="prism-orbit orbit-one"></div><div class="prism-orbit orbit-two"></div><svg viewBox="0 0 300 270" fill="none"><defs><linearGradient id="prism-gradient" x1="30" y1="20" x2="260" y2="230" gradientUnits="userSpaceOnUse"><stop stop-color="#00ffff"/><stop offset="0.5" stop-color="#00a8ff"/><stop offset="1" stop-color="#9945ff"/></linearGradient></defs><path d="M150 22 259 85 259 211 150 251 41 211 41 85 150 22Z" fill="url(#prism-gradient)" fill-opacity=".05" stroke="url(#prism-gradient)"/><path d="m150 22 55 94-55 135-55-135 55-94Zm-109 63 109 34 109-34M41 211l109-92 109 92M95 116l55 3 55-3" stroke="url(#prism-gradient)" stroke-width="1.5"/><path d="M150 72 184 131 150 184 116 131 150 72Z" fill="url(#prism-gradient)" fill-opacity=".2" stroke="url(#prism-gradient)"/></svg><span class="prism-caption">CREATE / RENDER / EXPORT</span></div></section>',
   '<div class="workspace" id="workspace">',
   '<section class="preview-panel"><div class="panel-heading"><div class="panel-title"><span class="section-number">01</span><h2>Animation preview</h2></div><span id="source-badge" class="muted">No file loaded</span></div>',
-  '<div id="stage" class="stage"><canvas id="preview" width="960" height="540"></canvas><div id="empty-state" class="empty-state"><span class="canvas-symbol">' + fileIcon + '</span><h3>YOUR NEXT FRAME<br>STARTS HERE.</h3><p>Choose a JavaScript file to preview your animation.</p><span class="empty-tag">CANVAS 2D / JAVASCRIPT</span></div></div>',
+  '<div id="stage" class="stage"><canvas id="preview" width="960" height="540"></canvas><div id="empty-state" class="empty-state"><span class="canvas-symbol">' + fileIcon + '</span><h3>YOUR NEXT FRAME<br>STARTS HERE.</h3><p>Drop your JavaScript files here to preview and render.</p><span class="empty-tag">CANVAS 2D / JAVASCRIPT</span></div></div>',
   '<div class="playback"><button id="play" class="icon-button" disabled aria-label="Play or pause preview">▶</button><input id="seek" aria-label="Preview time" type="range" min="0" max="20" step="0.01" value="0" disabled><span id="time" class="time">0.00 / 0.00 s</span></div>',
   '<div class="file-details"><span class="file-detail-icon" aria-hidden="true">JS</span><div><strong id="animation-title">Canvas 2D animation</strong><span id="metadata">Animation details will appear here.</span></div><span class="file-detail-label">SOURCE</span></div></section>',
   '<aside class="settings-panel" id="export-settings"><div class="panel-heading"><div class="panel-title"><span class="section-number">02</span><h2>Export settings</h2></div><span class="step-chip">H.264</span></div>',
-  '<label class="upload-zone" id="upload-zone"><span class="upload-icon">' + uploadIcon + '</span><strong id="file-label">Choose JavaScript files</strong><span>Up to 10 .js files · 5 MB per file</span><input id="file" type="file" accept=".js,text/javascript,application/javascript" multiple aria-label="Choose up to 10 JavaScript animation files"></label>',
+  '<label class="upload-zone" id="upload-zone"><span class="upload-icon">' + uploadIcon + '</span><strong id="file-label">Drop JavaScript files here</strong><span>or click to browse · Up to 10 .js files · 5 MB each</span><input id="file" type="file" accept=".js,text/javascript,application/javascript" multiple aria-label="Choose up to 10 JavaScript animation files"></label>',
   '<p id="canvas-repair-note" class="field-note">Canvas auto-repair is on. Coordinate arrays and point objects are unpacked automatically.</p>',
-  '<form id="settings"><label>Render location<select id="render-location"><option value="browser">This device · browser</option><option value="cloud">GitHub Cloud · Actions</option></select></label><label>Render engine<select id="engine"><option value="ffmpeg">FFmpeg · verified bitrate</option><option value="webcodecs" disabled>WebCodecs · bitrate not guaranteed</option></select></label><p id="engine-note" class="field-note"></p><div class="field-row"><label>Format<select id="format"><option value="mp4">MP4 · H.264</option><option value="mov">MOV · H.264</option></select></label><label>Frame rate<select id="fps"><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="24">24 FPS</option><option value="25">25 FPS</option><option value="50">50 FPS</option></select></label></div>',
+  '<form id="settings"><label>Render location<select id="render-location"><option value="cloud" selected>GitHub Cloud · Actions</option><option value="browser">This device · browser</option></select></label><label>Render engine<select id="engine"><option value="ffmpeg">FFmpeg · verified bitrate</option><option value="webcodecs" disabled>WebCodecs · bitrate not guaranteed</option></select></label><p id="engine-note" class="field-note"></p><div class="field-row"><label>Format<select id="format"><option value="mp4">MP4 · H.264</option><option value="mov">MOV · H.264</option></select></label><label>Frame rate<select id="fps"><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="24">24 FPS</option><option value="25">25 FPS</option><option value="50">50 FPS</option></select></label></div>',
   '<label>Resolution<select id="resolution"><option value="3840x2160">4K · 3840 × 2160</option><option value="2560x1440">2K · 2560 × 1440</option><option value="1920x1080" selected>FHD · 1920 × 1080</option><option value="1280x720">HD · 1280 × 720</option><option value="native" disabled>Original resolution</option></select></label>',
   '<label>Duration<select id="duration" aria-describedby="duration-note"><option value="full">Full animation · original duration</option>' + durationOptions + '<option value="2">Quick test · 2 seconds</option><option value="5">Quick test · 5 seconds</option></select></label><p id="duration-note" class="field-note">Full animation uses each file’s original duration.</p>',
   '<label>Bitrate mode<select id="bitrate-mode">' + bitrateOptions + '</select></label>',
@@ -42,7 +42,7 @@ document.querySelector('#app').innerHTML = [
   '<section class="job-panel" id="render-status" aria-live="polite"><div class="job-header"><div><p class="eyebrow">RENDER STATUS</p><h2 id="status">Ready to load an animation</h2></div><button id="cancel" class="secondary-button" disabled>Cancel render</button></div>',
   '<progress id="progress" aria-label="Render progress" value="0" max="100"></progress><div class="job-stats"><span id="frame-stat">0 frames</span><span id="speed-stat">—</span><span id="eta-stat">—</span></div><p id="encoding-details" class="field-note"></p><p id="repair-details" class="field-note" hidden></p><p id="message" class="job-message">For a quick first test, use 720p, 30 FPS, and a 2-second clip.</p><a id="download" class="download-link" hidden>Download video <span aria-hidden="true">↓</span></a></section>',
   '<section id="render-queue" class="queue-panel" aria-labelledby="queue-title" hidden><div class="queue-header"><div class="panel-title"><span class="section-number">03</span><h2 id="queue-title">Render queue</h2></div><span id="queue-count" class="step-chip"></span></div><p class="queue-note">Files render one at a time. If an animation fails, the next file starts automatically.</p><ol id="queue-list" class="queue-list"></ol><p id="queue-summary" class="queue-summary" role="status" aria-live="polite"></p></section>',
-  '<section id="cloud-panel" class="cloud-panel" aria-labelledby="cloud-title" hidden><div class="panel-title"><span class="section-number">CLOUD</span><h2 id="cloud-title">GitHub cloud render</h2></div><p>Prepare a job here, upload its JSON file to your repository, then start the workflow. After GitHub accepts the run, rendering continues with your browser closed or laptop switched off.</p><ol><li>Download your cloud job below.</li><li>Upload it to <strong>cloud/jobs</strong> and commit to main.</li><li>Open Actions, choose <strong>Render video in cloud</strong>, and click <strong>Run workflow</strong>.</li><li>Enter the job path shown below. Watch progress in Actions and download completed videos from Artifacts.</li></ol><p id="cloud-job-info" class="field-note" aria-live="polite">Choose files and click Prepare cloud job. No render starts until you run the workflow in GitHub.</p><div class="cloud-actions"><a id="cloud-job-download" class="download-link" hidden>Download cloud job ↓</a><a id="cloud-upload" class="secondary-button" target="_blank" rel="noopener noreferrer">Upload job to GitHub ↗</a><a id="cloud-actions-link" class="secondary-button" target="_blank" rel="noopener noreferrer">Open GitHub Actions ↗</a></div><p class="field-note">Up to 10 files, 5 MB each, and 20 MB per job package. Use trusted, self-contained Canvas JS. Uploading a job to a public repository makes its JavaScript source public, including Git history. Videos stay in Artifacts for 3 days. Cancel running cloud jobs in Actions. Progress is shown in GitHub, not synchronized to this local queue.</p></section>',
+  CLOUD_PANEL_HTML,
   '<section class="ai-panel" aria-labelledby="ai-title"><div class="panel-title"><span class="section-number">04</span><h2 id="ai-title">AI Auto Repair · GPT-5.6 Sol</h2></div><p class="queue-note">Use Auto Repair on a file in the render queue. Repaired code is tested across the full animation before it becomes ready to render.</p><details id="ai-settings"><summary>AI repair connection</summary><div class="ai-fields"><label>AI backend URL<input id="ai-endpoint" type="url" placeholder="https://canvas-ai-repair.example.workers.dev" autocomplete="off"></label><label>Repair access code<input id="ai-token" type="password" placeholder="Your private repair access code" autocomplete="off" spellcheck="false"></label></div><button id="ai-check" class="secondary-button" type="button">Check backend</button><p id="ai-connection" class="field-note" aria-live="polite">Configure your backend to enable AI repair. Keep your OpenAI API key in the backend.</p></details><label class="ai-consent"><input id="ai-consent" type="checkbox">Allow the selected JavaScript file and error details to be sent to OpenAI through my backend for repair.</label><p class="field-note">Up to 250 KB per file and two AI requests per click. API usage is billed separately. The access code stays in this tab; only the backend URL is remembered. Your original file is kept. Review the preview before exporting.</p><p id="ai-status" class="field-note" aria-live="polite">AI repair is ready to configure.</p></section>',
   '<footer><span>JAVASCRIPT → CANVAS → MP4 / MOV</span><span id="footer-note">Keep this tab open while rendering on this device.</span></footer>',
   '</main>',
@@ -54,20 +54,16 @@ const state = {
   playing: false, raf: 0, time: 0, origin: 0, originTime: 0,
   drawing: false, pendingTime: null, loading: false, busy: false, cancelRequested: false, fileStream: null,
   activeSettings: null, lastRenderBitrate: null, jobs: [], currentJob: null, preparing: null, repairing: null,
-  cloudDownload: null,
+  cloudQueueJobId: null,
 };
 const queue = createRenderQueue($('render-queue'), job => loadPreview(job), repairJob, restoreOriginal);
-$('cloud-upload').href = CLOUD_UPLOAD_URL;
-$('cloud-actions-link').href = CLOUD_ACTIONS_URL;
 const isCloud = () => $('render-location').value === 'cloud';
-
-function clearCloudDownload() {
-  if (state.cloudDownload) URL.revokeObjectURL(state.cloudDownload);
-  state.cloudDownload = null;
-  $('cloud-job-download').hidden = true;
-  $('cloud-job-download').removeAttribute('href');
-  $('cloud-job-info').textContent = 'Choose files and click Prepare cloud job. No render starts until you run the workflow in GitHub.';
-}
+const cloudControls = makeCloudControls({
+  onChange: updateControls,
+  onRun: showCloudStatus,
+  onReport: applyCloudReport,
+  onConnect: () => { $('render-location').value = 'cloud'; updateEngineNotes(); },
+});
 
 function makeBridge(onEvent, restricted = false) {
   const worker = new Worker(new URL('./render-worker.js', import.meta.url), { type: 'module' });
@@ -130,17 +126,17 @@ function updateRepairDetails(report) {
 }
 
 function updateControls() {
-  const blocked = state.busy || state.loading;
+  const blocked = state.busy || state.loading || cloudControls.running || cloudControls.connecting;
   $('file').disabled = blocked;
   $('upload-zone').classList.toggle('disabled', blocked);
   for (const element of $('settings').querySelectorAll('input, select, button')) element.disabled = blocked;
   $('save-mode').disabled = blocked || isCloud();
   $('render').disabled = blocked || !state.jobs.length || (!isCloud() && !browserReady);
-  $('render').innerHTML = (isCloud() ? 'Prepare cloud job' : state.jobs.length > 1 ? 'Render ' + state.jobs.length + ' videos' : 'Render video') + ' <span aria-hidden="true">↗</span>';
+  $('render').innerHTML = (state.jobs.length > 1 ? 'Render ' + state.jobs.length + ' videos' : 'Render video') + ' <span aria-hidden="true">↗</span>';
   $('play').disabled = blocked || !state.meta;
   $('seek').disabled = blocked || !state.meta;
-  $('cancel').disabled = !state.busy;
-  $('cancel').textContent = state.repairing ? 'Cancel repair' : isCloud() ? 'Cancel preparation' : state.jobs.length > 1 ? 'Cancel queue' : 'Cancel render';
+  $('cancel').disabled = isCloud() && !state.repairing ? !cloudControls.canCancel : !state.busy;
+  $('cancel').textContent = state.repairing ? 'Cancel repair' : isCloud() ? 'Cancel cloud render' : state.jobs.length > 1 ? 'Cancel queue' : 'Cancel render';
   for (const element of $('ai-settings').querySelectorAll('input, button')) element.disabled = blocked;
   $('ai-consent').disabled = blocked;
   queue.setBlocked(blocked);
@@ -536,17 +532,18 @@ async function loadPreview(job, initial = false) {
   } finally { state.loading = false; updateControls(); }
 }
 
-$('file').addEventListener('change', async (event) => {
-  if (state.busy || state.loading) return;
-  const files = Array.from(event.target.files);
+async function selectFiles(files) {
+  if (state.busy || state.loading || cloudControls.running || cloudControls.connecting) return;
+  files = Array.from(files);
   if (!files.length) return;
-  event.target.value = '';
   if (files.length > MAX_QUEUE_FILES) {
     setMessage('Select up to ' + MAX_QUEUE_FILES + ' JavaScript files. You selected ' + files.length + '. The current queue has been kept.', true);
     return;
   }
+  const invalid = files.find(file => !file.name.toLowerCase().endsWith('.js') || file.size > 5_000_000);
+  if (invalid) { setMessage(invalid.name + ' · Choose .js files up to 5 MB each. The current queue has been kept.', true); return; }
   clearDownload();
-  clearCloudDownload();
+  state.cloudQueueJobId = null;
   state.jobs = queue.replace(files);
   $('file-label').textContent = files.length === 1 ? files[0].name : files.length + ' JavaScript files selected';
   if (files.length > 1 && $('resolution').value === 'native') updateBitrateMode();
@@ -557,6 +554,30 @@ $('file').addEventListener('change', async (event) => {
   $('eta-stat').textContent = '—';
   $('encoding-details').textContent = '';
   await loadPreview(state.jobs[0], true);
+}
+$('file').addEventListener('change', event => {
+  const files = Array.from(event.target.files);
+  event.target.value = '';
+  void selectFiles(files);
+});
+let dragDepth = 0;
+const fileDrag = event => Array.from(event.dataTransfer?.types || []).includes('Files');
+document.addEventListener('dragenter', event => {
+  if (!fileDrag(event)) return;
+  event.preventDefault(); dragDepth++;
+  if (!$('file').disabled) $('upload-zone').classList.add('drop-active');
+});
+document.addEventListener('dragover', event => {
+  if (!fileDrag(event)) return;
+  event.preventDefault(); event.dataTransfer.dropEffect = $('file').disabled ? 'none' : 'copy';
+});
+document.addEventListener('dragleave', () => {
+  if (--dragDepth <= 0) { dragDepth = 0; $('upload-zone').classList.remove('drop-active'); }
+});
+document.addEventListener('drop', event => {
+  if (!fileDrag(event)) return;
+  event.preventDefault(); dragDepth = 0; $('upload-zone').classList.remove('drop-active');
+  void selectFiles(event.dataTransfer.files);
 });
 
 $('play').addEventListener('click', () => {
@@ -580,7 +601,7 @@ function updateEngineNotes() {
   if (diskOption.disabled && $('save-mode').value === 'disk') $('save-mode').value = 'download';
   $('save-mode').querySelector('[value="download"]').textContent = cloud ? 'GitHub Artifacts · 3 days' : batch ? 'Download each completed video' : 'Download when complete';
   $('engine').querySelector('[value="ffmpeg"]').textContent = cloud ? 'FFmpeg native · verified bitrate' : 'FFmpeg · verified bitrate';
-  $('engine-note').textContent = cloud ? 'Prepare a job here, then start native CPU rendering in GitHub Actions. Progress and results are shown in GitHub.' : isFfmpeg ?
+  $('engine-note').textContent = cloud ? 'Click Render to upload your animations and start GitHub Actions automatically. Cloud status and completed videos appear below.' : isFfmpeg ?
     'The video bitrate is verified against your selected range before saving.' :
     'Faster encoding. The actual bitrate may be much lower than your target.';
   $('bitrate-note').textContent = isFfmpeg ?
@@ -590,7 +611,7 @@ function updateEngineNotes() {
     'Download each result from its row, or choose one folder when supported. Encoding uses memory; each output is limited to approximately 500 MB.' :
     'Encoding uses memory even when choosing a save location. Output is limited to approximately 500 MB.';
   $('cloud-panel').hidden = !cloud;
-  $('footer-note').textContent = cloud ? 'Start the job in GitHub Actions before closing the browser.' : 'Keep this tab open while rendering on this device.';
+  $('footer-note').textContent = cloud ? 'After GitHub accepts the run, rendering continues with your browser closed.' : 'Keep this tab open while rendering on this device.';
   document.querySelector('.local-badge').innerHTML = '<i></i>' + (cloud ? 'Render in GitHub Actions' : 'Runs on your device');
   $('capabilities').textContent = cloud ? 'Cloud render uses the standard GitHub runner’s CPU. Browser support only affects the local preview.' : browserReady ? 'Browser ready. FFmpeg runs on this device’s CPU.' : 'Export requires OffscreenCanvas, Worker, WebAssembly, and HTTPS or localhost.';
   $('capabilities').classList.toggle('unsupported', !cloud && !browserReady);
@@ -606,7 +627,55 @@ $('fps').addEventListener('change', updatePreviewTiming);
 $('random-bitrate').addEventListener('click', randomizeBitrate);
 $('render-location').addEventListener('change', updateEngineNotes);
 
-async function prepareCloudJob(preferences) {
+function showCloudStatus(record, submitted = false) {
+  if (submitted) state.cloudQueueJobId = record.id;
+  if (!isCloud() || state.loading || (state.busy && !submitted && state.cloudQueueJobId !== record.id)) return;
+  // Refreshing an older cloud job must not overwrite the selected queue.
+  if (state.cloudQueueJobId && state.cloudQueueJobId !== record.id) return;
+  const labels = { uploading: 'Uploading animations…', starting: 'Starting cloud render…', queued: 'Queued in GitHub',
+    locating: 'Locating your cloud render…', uncertain: 'Checking cloud render status…',
+    in_progress: record.cancelRequested ? 'Cancellation requested' : record.phase || 'Rendering in GitHub',
+    completed: record.conclusion === 'cancelled' ? 'Cloud render cancelled' : 'Cloud render finished',
+    upload_failed: 'Unable to start cloud render', unconfirmed: 'Cloud run not confirmed' };
+  $('status').textContent = labels[record.status] || 'Waiting in GitHub';
+  $('speed-stat').textContent = 'GitHub Actions · native FFmpeg';
+  $('eta-stat').textContent = record.status === 'completed' ? 'Results below' : 'Time varies by animation';
+  if (record.status === 'completed') {
+    $('progress').value = 100;
+    const completed = (record.resultFiles || []).filter(file => file.status === 'completed').length;
+    $('frame-stat').textContent = record.resultFiles?.length ? completed + ' / ' + record.fileNames.length + ' videos completed' : 'See cloud results below';
+    setMessage(record.error || (record.conclusion === 'cancelled' ? 'The cloud run was cancelled. Completed outputs, if any, remain available below.' : 'Download completed videos from Recent cloud jobs below. Video downloads are available for 3 days.'), Boolean(record.error));
+    if (record.conclusion === 'cancelled' && state.cloudQueueJobId === record.id) {
+      for (const job of state.jobs) if (job.status === 'pending' || job.status === 'rendering') {
+        job.status = 'cancelled'; job.detail = 'Cloud run cancelled before this file was confirmed complete.'; queue.update(job);
+      }
+    }
+  } else {
+    if (record.status === 'upload_failed' || record.status === 'unconfirmed') $('progress').value = 0;
+    else $('progress').removeAttribute('value');
+    $('frame-stat').textContent = record.fileNames.length + ' animation' + (record.fileNames.length > 1 ? 's' : '') + ' in cloud batch';
+    setMessage(record.error || (record.accepted ? 'GitHub accepted your render. You can close this browser or switch off your laptop. Reopen this website to check results.' : 'Keep this tab open until GitHub confirms the render.'), record.status === 'upload_failed');
+  }
+}
+
+function applyCloudReport(report, record) {
+  if (state.cloudQueueJobId !== record.id || state.jobs.length !== report.files.length) return;
+  report.files.forEach((file, index) => {
+    const job = state.jobs[index];
+    if (file.fileName !== job.file.name) return;
+    job.status = file.status;
+    job.detail = file.status === 'completed' ? 'Verified · ' + (file.videoBitrate / 1e6).toFixed(3) + ' Mbps · ' + file.frames + ' frames · ' + file.duration + ' s. Download from Recent cloud jobs.' : file.error || 'Cloud render failed.';
+    queue.update(job);
+  });
+}
+
+async function startCloudRender(preferences) {
+  if (!cloudControls.connected) {
+    cloudControls.openConnection();
+    setMessage('Connect GitHub once below, then click Render.');
+    return;
+  }
+  state.cloudQueueJobId = null;
   state.busy = true;
   state.cancelRequested = false;
   updateControls();
@@ -618,23 +687,11 @@ async function prepareCloudJob(preferences) {
       sources.push({ fileName: job.file.name, source: await jobSource(job) });
     }
     checkCancelled();
-    const job = createCloudJob(preferences, sources);
-    const json = JSON.stringify(job, null, 2);
-    if (new TextEncoder().encode(json).length > 20_000_000) throw new Error('The cloud job exceeds 20 MB. Select fewer files.');
-    clearCloudDownload();
-    state.cloudDownload = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
-    const name = job.id + '.json';
-    $('cloud-job-download').href = state.cloudDownload;
-    $('cloud-job-download').download = name;
-    $('cloud-job-download').hidden = false;
-    $('cloud-job-info').textContent = 'Job ready · ' + job.files.length + ' file(s). Enter this path in Run workflow: cloud/jobs/' + name;
-    $('cloud-panel').hidden = false;
-    $('status').textContent = 'Cloud job ready to upload';
-    $('progress').value = 0;
-    setMessage('Download the job JSON, upload it to cloud/jobs, and start Render video in cloud in GitHub Actions. The job is prepared; cloud rendering has not started yet.');
+    clearDownload(); queue.reset();
+    await cloudControls.submit(preferences, sources);
   } catch (error) {
-    $('status').textContent = state.cancelRequested ? 'Cloud preparation cancelled' : 'Unable to prepare cloud job';
-    setMessage(error.message, !state.cancelRequested);
+    $('status').textContent = 'Unable to start cloud render';
+    setMessage(error.message, true);
   } finally { state.busy = false; state.cancelRequested = false; updateControls(); }
 }
 
@@ -829,14 +886,14 @@ async function renderJob(job, preferences, bitrate, directory, diskNames) {
 
 $('settings').addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (!state.jobs.length || state.busy || state.loading) return;
+  if (!state.jobs.length || state.busy || state.loading || cloudControls.running || cloudControls.connecting) return;
   pause();
   let preferences;
   try {
     randomizeBitrate();
     preferences = exportPreferences();
   } catch (error) { setMessage(error.message, true); return; }
-  if (isCloud()) { await prepareCloudJob(preferences); return; }
+  if (isCloud()) { await startCloudRender(preferences); return; }
   state.busy = true;
   state.cancelRequested = false;
   clearDownload();
@@ -913,7 +970,8 @@ $('settings').addEventListener('submit', async (event) => {
   }
 });
 
-$('cancel').addEventListener('click', () => {
+$('cancel').addEventListener('click', async () => {
+  if (isCloud() && !state.repairing) { await cloudControls.cancel(); return; }
   if (!state.busy) return;
   state.cancelRequested = true;
   if (state.repairing) state.repairing.abort();
@@ -923,8 +981,9 @@ $('cancel').addEventListener('click', () => {
 });
 
 window.addEventListener('beforeunload', (event) => {
-  if (state.busy) { event.preventDefault(); event.returnValue = ''; }
+  if (state.busy && !(isCloud() && state.cloudQueueJobId && cloudControls.accepted)) { event.preventDefault(); event.returnValue = ''; }
 });
 updateEngineNotes();
 updateBitrateMode();
 updateControls();
+cloudControls.init();
