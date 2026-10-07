@@ -37,7 +37,13 @@ async function loadAnimation(source, fileName) {
   animation = candidates.find((a) => a && a.meta &&
     (typeof a.drawFrame === 'function' || typeof a.render === 'function'));
   if (!animation) {
-    throw new Error('No animation API was found. The file must provide meta and drawFrame(canvas, seconds) or render(ctx, seconds).');
+    // Standalone Canvas sources can export draw(ctx, seconds, width, height)
+    // directly, with their metadata attached to that function as draw.meta.
+    const draw = candidates.find(a => typeof a === 'function' && a.meta);
+    if (draw) animation = { meta: draw.meta, render: (ctx, seconds, width, height) => draw(ctx, seconds, width, height) };
+  }
+  if (!animation) {
+    throw new Error('No animation API was found. Export meta with drawFrame(canvas, seconds) or render(ctx, seconds), or a draw(ctx, seconds, width, height) function with draw.meta.');
   }
   const m = animation.meta;
   for (const key of ['width', 'height', 'fps', 'duration']) {
