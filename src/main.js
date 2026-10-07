@@ -5,6 +5,7 @@ import { MAX_QUEUE_FILES, createRenderQueue, outputFileName, uniqueOutputName } 
 import { MAX_AI_SOURCE_BYTES, repairEndpoint, callRepairBackend, applyRepairEdits, validateAnimation } from './ai-repair.js';
 import { FIXED_DURATIONS, durationSettings, animationTime } from './duration-settings.js';
 import { CLOUD_PANEL_HTML, makeCloudControls } from './cloud-controls.js';
+import { PREVIEW_TABS_HTML, QUICK_PREVIEW_HTML, makeQuickPreview } from './quick-preview.js';
 
 document.title = 'Canvas Video Studio';
 document.documentElement.lang = 'en';
@@ -22,9 +23,13 @@ document.querySelector('#app').innerHTML = [
   '<section class="intro"><div class="intro-content"><p class="eyebrow"><span class="eyebrow-line"></span>YOUR BROWSER. YOUR RENDER ENGINE.</p><h1>TURN CODE<br>INTO <span>MOTION.</span></h1><p class="intro-copy">Transform your JavaScript animations into crisp, smooth video. Drop your animation files, choose your settings, and render in GitHub Cloud or on your device.</p><div class="feature-tags"><span>MP4 &amp; MOV</span><span>UP TO 4K</span><span>60 FPS</span></div></div><div class="prism-art" aria-hidden="true"><div class="prism-orbit orbit-one"></div><div class="prism-orbit orbit-two"></div><svg viewBox="0 0 300 270" fill="none"><defs><linearGradient id="prism-gradient" x1="30" y1="20" x2="260" y2="230" gradientUnits="userSpaceOnUse"><stop stop-color="#00ffff"/><stop offset="0.5" stop-color="#00a8ff"/><stop offset="1" stop-color="#9945ff"/></linearGradient></defs><path d="M150 22 259 85 259 211 150 251 41 211 41 85 150 22Z" fill="url(#prism-gradient)" fill-opacity=".05" stroke="url(#prism-gradient)"/><path d="m150 22 55 94-55 135-55-135 55-94Zm-109 63 109 34 109-34M41 211l109-92 109 92M95 116l55 3 55-3" stroke="url(#prism-gradient)" stroke-width="1.5"/><path d="M150 72 184 131 150 184 116 131 150 72Z" fill="url(#prism-gradient)" fill-opacity=".2" stroke="url(#prism-gradient)"/></svg><span class="prism-caption">CREATE / RENDER / EXPORT</span></div></section>',
   '<div class="workspace" id="workspace">',
   '<section class="preview-panel"><div class="panel-heading"><div class="panel-title"><span class="section-number">01</span><h2>Animation preview</h2></div><span id="source-badge" class="muted">No file loaded</span></div>',
+  PREVIEW_TABS_HTML,
+  '<div id="preview-files-content" role="tabpanel" aria-labelledby="preview-files-tab">',
   '<div id="stage" class="stage"><canvas id="preview" width="960" height="540"></canvas><div id="empty-state" class="empty-state"><span class="canvas-symbol">' + fileIcon + '</span><h3>YOUR NEXT FRAME<br>STARTS HERE.</h3><p>Drop your JavaScript files here to preview and render.</p><span class="empty-tag">CANVAS 2D / JAVASCRIPT</span></div></div>',
   '<div class="playback"><button id="play" class="icon-button" disabled aria-label="Play or pause preview">▶</button><input id="seek" aria-label="Preview time" type="range" min="0" max="20" step="0.01" value="0" disabled><span id="time" class="time">0.00 / 0.00 s</span></div>',
-  '<div class="file-details"><span class="file-detail-icon" aria-hidden="true">JS</span><div><strong id="animation-title">Canvas 2D animation</strong><span id="metadata">Animation details will appear here.</span></div><span class="file-detail-label">SOURCE</span></div></section>',
+  '<div class="file-details"><span class="file-detail-icon" aria-hidden="true">JS</span><div><strong id="animation-title">Canvas 2D animation</strong><span id="metadata">Animation details will appear here.</span></div><span class="file-detail-label">SOURCE</span></div></div>',
+  QUICK_PREVIEW_HTML,
+  '</section>',
   '<aside class="settings-panel" id="export-settings"><div class="panel-heading"><div class="panel-title"><span class="section-number">02</span><h2>Export settings</h2></div><span class="step-chip">H.264</span></div>',
   '<label class="upload-zone" id="upload-zone"><span class="upload-icon">' + uploadIcon + '</span><strong id="file-label">Drop JavaScript files here</strong><span>or click to browse · Up to 10 .js files · 5 MB each</span><input id="file" type="file" accept=".js,text/javascript,application/javascript" multiple aria-label="Choose up to 10 JavaScript animation files"></label>',
   '<p id="canvas-repair-note" class="field-note">Canvas auto-repair is on. Coordinate arrays and point objects are unpacked automatically.</p>',
@@ -57,6 +62,7 @@ const state = {
   cloudQueueJobId: null,
 };
 const queue = createRenderQueue($('render-queue'), job => loadPreview(job), repairJob, restoreOriginal);
+let quickPreview;
 const isCloud = () => $('render-location').value === 'cloud';
 const cloudControls = makeCloudControls({
   onChange: updateControls,
@@ -131,7 +137,7 @@ function updateControls() {
   $('upload-zone').classList.toggle('disabled', blocked);
   for (const element of $('settings').querySelectorAll('input, select, button')) element.disabled = blocked;
   $('save-mode').disabled = blocked || isCloud();
-  $('render').disabled = blocked || !state.jobs.length || (!isCloud() && !browserReady);
+  $('render').disabled = blocked || quickPreview?.active || !state.jobs.length || (!isCloud() && !browserReady);
   $('render').innerHTML = (state.jobs.length > 1 ? 'Render ' + state.jobs.length + ' videos' : 'Render video') + ' <span aria-hidden="true">↗</span>';
   $('play').disabled = blocked || !state.meta;
   $('seek').disabled = blocked || !state.meta;
@@ -140,6 +146,7 @@ function updateControls() {
   for (const element of $('ai-settings').querySelectorAll('input, button')) element.disabled = blocked;
   $('ai-consent').disabled = blocked;
   queue.setBlocked(blocked);
+  quickPreview?.setBlocked({ editing: state.busy || state.loading, using: blocked });
 }
 
 function exportPreferences() {
@@ -312,6 +319,12 @@ $('capabilities').textContent = browserReady ?
   'Export requires OffscreenCanvas, Worker, WebAssembly, and HTTPS or localhost.';
 $('capabilities').classList.toggle('unsupported', !browserReady);
 
+quickPreview = makeQuickPreview({
+  makeBridge: () => makeBridge(undefined, true),
+  onModeChange: active => { pause(); $('source-badge').hidden = active; document.querySelector('.preview-panel').classList.toggle('quick-mode', active); updateControls(); },
+  onUse: source => selectFiles([new File([source], 'quick-preview.js', { type: 'text/javascript' })]),
+});
+
 async function jobSource(job) {
   if (job.file.size > 5_000_000) throw new Error(job.file.name + ' · Choose a JavaScript file smaller than 5 MB.');
   if (!job.file.name.toLowerCase().endsWith('.js')) throw new Error(job.file.name + ' · Choose a file with a .js extension.');
@@ -467,6 +480,7 @@ $('ai-check').addEventListener('click', async () => {
 
 async function loadPreview(job, initial = false) {
   if (state.busy || state.loading) return;
+  quickPreview.showFiles();
   pause();
   updateRepairDetails({ repairedCalls: 0 });
   $('canvas-repair-note').textContent = 'Canvas auto-repair is on. Coordinate arrays and point objects are unpacked automatically.';
@@ -886,7 +900,7 @@ async function renderJob(job, preferences, bitrate, directory, diskNames) {
 
 $('settings').addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (!state.jobs.length || state.busy || state.loading || cloudControls.running || cloudControls.connecting) return;
+  if (quickPreview.active || !state.jobs.length || state.busy || state.loading || cloudControls.running || cloudControls.connecting) return;
   pause();
   let preferences;
   try {

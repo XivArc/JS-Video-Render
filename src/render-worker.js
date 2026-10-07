@@ -63,13 +63,16 @@ async function loadAnimation(source, fileName) {
   return metadata;
 }
 
-function restrictAnimationIO(source) {
+function restrictAnimationIO(source, context = 'AI repair') {
+  const quick = context === 'Quick Preview';
   if (/\bimport\s*(?:\(|['"{*]|[A-Za-z_$])|\bexport\s+(?:\*|\{[^}]*\})\s*from\s*['"]|\b(?:eval|Function|importScripts)\s*\(/.test(source)) {
-    throw new Error('AI repair supports self-contained Canvas JavaScript without imports or dynamic code execution.');
+    throw new Error((quick ? 'Quick Preview' : 'AI repair') + ' supports self-contained Canvas JavaScript without imports or dynamic code execution.');
   }
-  const blocked = () => { throw new Error('Network access is disabled for AI-repaired animations.'); };
+  const blocked = () => { throw new Error('Network access is disabled for ' + (quick ? 'Quick Preview animations.' : 'AI-repaired animations.')); };
   for (const name of ['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'Worker', 'SharedWorker', 'importScripts']) {
-    if (!Object.getOwnPropertyDescriptor(globalThis, name)?.configurable && name in globalThis) continue;
+    // Worker APIs can be inherited; shadow those as well as configurable own properties.
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+    if (descriptor && !descriptor.configurable) continue;
     Object.defineProperty(globalThis, name, { value: blocked, writable: false, configurable: false });
   }
 }
@@ -171,7 +174,7 @@ self.onmessage = async ({ data }) => {
   const { id, type, payload = {} } = data;
   try {
     if (type === 'load') {
-      if (payload.restricted) restrictAnimationIO(payload.source);
+      if (payload.restricted) restrictAnimationIO(payload.source, payload.restrictedContext);
       self.postMessage({ id, ok: true, result: await loadAnimation(payload.source, payload.fileName) });
     } else if (type === 'draw') {
       const { width, height, time } = payload;

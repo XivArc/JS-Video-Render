@@ -112,12 +112,47 @@ h1 > span { background: linear-gradient(110deg, #f1eaff 0%, #c899ff 38%, #55c9ff
 .preview-panel, .settings-panel, .job-panel { position: relative; min-width: 0; background: linear-gradient(140deg, rgba(26, 26, 26, .98), rgba(18, 18, 18, .98)); border: 1px solid var(--border); border-radius: 18px; box-shadow: 0 18px 50px rgba(0, 0, 0, .22), inset 0 1px 0 rgba(255, 255, 255, .035); }
 .preview-panel::before, .job-panel::before { content: ''; position: absolute; top: -1px; left: 26px; right: 26px; height: 1px; background: linear-gradient(90deg, transparent, rgba(0, 168, 255, .75), rgba(153, 69, 255, .55), transparent); }
 .preview-panel { position: sticky; top: 24px; overflow: hidden; }
+.preview-panel.quick-mode { position: relative; top: auto; }
+.quick-mode #quick-stage { width: calc(100% - 36px); max-height: 280px; }
 .panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 22px; }
 .panel-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .section-number { font-family: 'Orbitron', sans-serif; font-size: 10px; color: #8c859b; font-weight: 500; }
 h2 { font-family: 'Orbitron', sans-serif; font-size: 11px; letter-spacing: .8px; text-transform: uppercase; font-weight: 600; margin: 0; line-height: 1.6; }
 .muted { color: #9b99a7; font-size: 12px; white-space: nowrap; }
 .muted.loaded { color: #73ded2; }
+.preview-tabs { display: flex; gap: 8px; margin: 0 18px 17px; padding: 4px; border: 1px solid #35303e; border-radius: 9px; background: #111015; }
+.preview-tabs button { min-width: 0; flex: 1; border: 1px solid transparent; border-radius: 6px; padding: 10px 9px; color: #aaa0ba; background: transparent; font-size: 14px; font-weight: 600; }
+.preview-tabs button[aria-selected='true'] { color: #e6d9ff; border-color: #57406d; background: linear-gradient(110deg, rgba(153, 69, 255, .15), rgba(0, 168, 255, .06)); }
+.preview-tabs button > span { display: inline-block; margin-left: 5px; color: #6ce1d2; font-size: 9px; letter-spacing: 1px; }
+.quick-code-symbol { font: 600 28px ui-monospace, Consolas, monospace; color: #b194ed; margin-bottom: 16px; }
+.quick-meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin: -4px 22px 17px; color: #a699b8; font-size: 12px; }
+.quick-meta > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.quick-meta label { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.quick-meta input { margin: 0; accent-color: #a77bff; }
+.quick-terminal { margin: 0 18px; min-width: 0; overflow: hidden; border: 1px solid #413449; border-radius: 9px; background: #0e0f16; }
+.quick-terminal:focus-within { border-color: #9972d2; box-shadow: 0 0 0 2px rgba(153, 69, 255, .09); }
+.quick-terminal-heading { display: flex; align-items: center; gap: 11px; min-width: 0; padding: 11px 13px; border-bottom: 1px solid #302938; background: #1a1720; }
+.terminal-dots { display: flex; gap: 5px; }
+.terminal-dots i { width: 7px; height: 7px; border-radius: 50%; background: #9e739d; }
+.terminal-dots i:nth-child(2) { background: #9d925d; }
+.terminal-dots i:nth-child(3) { background: #5c9b92; }
+.quick-terminal-heading label { font: 11px ui-monospace, Consolas, monospace; color: #d1c0e5; }
+#quick-code-count { margin-left: auto; color: #887c9a; font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#quick-code { display: block; width: 100%; max-width: 100%; min-width: 0; height: 250px; min-height: 150px; max-height: 600px; padding: 17px; margin: 0; border: 0; outline: 0; background: #0e0f16; color: #cbdadf; font: 12px/1.8 ui-monospace, 'Cascadia Code', Consolas, 'Courier New', monospace; tab-size: 2; resize: vertical; overflow: auto; }
+#quick-code::placeholder { color: #6c7186; }
+#quick-code[readonly] { opacity: .55; }
+.quick-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 15px 22px; }
+.quick-actions > div { display: flex; flex-wrap: wrap; gap: 7px; }
+.quick-actions .secondary-button { font-size: 12px; padding: 7px 9px; }
+.quick-use-button { border: 1px solid #655282; border-radius: 7px; padding: 8px 12px; background: linear-gradient(110deg, rgba(153, 69, 255, .2), rgba(0, 168, 255, .14)); color: #e6d6ff; font-size: 13px; font-weight: 600; }
+.quick-use-button span { margin-left: 8px; color: #8ce3e7; }
+.quick-status { margin: 0 22px 8px; color: #7dddd0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.quick-status.error { color: #ffaaaa; }
+.quick-note { margin: 0 22px 15px; color: #91869f; font-size: 12px; line-height: 1.5; }
+.quick-api { margin: 0 22px 20px; border-top: 1px solid #302936; padding-top: 11px; color: #9f91b0; font-size: 12px; }
+.quick-api summary { cursor: pointer; color: #bca6da; }
+.quick-api p { line-height: 1.6; overflow-wrap: anywhere; }
+.quick-api code { color: #d0c2e6; font-size: 11px; }
 .stage { aspect-ratio: 16 / 9; position: relative; background: #0a0a0d; margin: 0 18px; border: 1px solid #292831; border-radius: 10px; overflow: hidden; }
 .stage canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
 .empty-state { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; background: radial-gradient(ellipse at 50% 43%, rgba(153, 69, 255, .07), transparent 70%), linear-gradient(rgba(255, 255, 255, .018) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, .018) 1px, transparent 1px), #0c0c0f; background-size: auto, 35px 35px, 35px 35px, auto; }
@@ -312,6 +347,19 @@ footer > span:first-child { font-size: 10px; letter-spacing: 1.8px; }
   h2 { font-size: 9px; letter-spacing: .5px; }
   .muted { font-size: 11px; }
   .stage { margin: 0 12px; border-radius: 7px; }
+  .preview-tabs { margin: 0 12px 14px; }
+  .preview-tabs button { font-size: 12px; padding: 9px 5px; }
+  .preview-tabs button > span { font-size: 8px; }
+  .quick-terminal { margin: 0 12px; }
+  .quick-mode #quick-stage { width: calc(100% - 24px); }
+  .quick-terminal-heading { padding: 10px; gap: 8px; }
+  .terminal-dots { gap: 4px; }
+  .terminal-dots i { width: 5px; height: 5px; }
+  .quick-terminal-heading label { font-size: 10px; }
+  #quick-code-count { font-size: 10px; }
+  #quick-code { padding: 12px; font-size: 11px; height: 220px; }
+  .quick-meta, .quick-actions { margin-left: 15px; margin-right: 15px; }
+  .quick-status, .quick-note, .quick-api { margin-left: 15px; margin-right: 15px; }
   .empty-state { padding: 16px; }
   .canvas-symbol { width: 31px; height: 36px; margin-bottom: 7px; }
   .empty-state h3 { font-size: 12px; line-height: 1.5; margin-bottom: 7px; }
