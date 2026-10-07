@@ -39,6 +39,11 @@ random target bitrate). It supports the same Canvas animation API as the
 browser: `meta` plus `drawFrame(canvas, seconds)` or
 `render(ctx, seconds, width, height)`, using a default export, CommonJS, or
 `globalThis.SmartHomeAnimations[id]`.
+It also accepts a directly exported `draw(ctx, seconds, width, height)` function
+with `draw.meta` through the same export mechanisms. The function adapter does
+not rewrite source or timing; required metadata and limits are still checked.
+The chosen Auto Random profile controls dimensions and verified bitrate,
+including for sources that attach their own `draw.exportSettings`.
 
 Jobs accept 1–10 sources, each up to 5 MB in UTF-8, and a total JSON size of
 20 MB. Sources must be trusted, self-contained Canvas JavaScript. Imports,

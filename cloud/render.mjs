@@ -26,6 +26,7 @@ const assets = new Map([
   ['/cloud/canvas-worker.js', ['cloud/canvas-worker.js', 'text/javascript']],
   ['/src/canvas-auto-repair.js', ['src/canvas-auto-repair.js', 'text/javascript']],
   ['/src/duration-settings.js', ['src/duration-settings.js', 'text/javascript']],
+  ['/src/animation-reader.js', ['src/animation-reader.js', 'text/javascript']],
 ]);
 
 async function readJob() {

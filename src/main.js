@@ -321,6 +321,12 @@ $('capabilities').classList.toggle('unsupported', !browserReady);
 
 quickPreview = makeQuickPreview({
   makeBridge: () => makeBridge(undefined, true),
+  readDefaults: () => {
+    const dimensions = $('resolution').value === 'native' ?
+      [state.meta?.width, state.meta?.height] : $('resolution').value.split('x').map(Number);
+    return { width: dimensions[0] || 1920, height: dimensions[1] || 1080,
+      fps: Number($('fps').value), duration: Number($('duration').value) || 20 };
+  },
   onModeChange: active => { pause(); $('source-badge').hidden = active; document.querySelector('.preview-panel').classList.toggle('quick-mode', active); updateControls(); },
   onUse: source => selectFiles([new File([source], 'quick-preview.js', { type: 'text/javascript' })]),
 });
@@ -638,6 +644,9 @@ $('bitrate-mode').addEventListener('change', () => updateBitrateMode());
 $('resolution').addEventListener('change', updateResolutionMode);
 $('duration').addEventListener('change', updatePreviewTiming);
 $('fps').addEventListener('change', updatePreviewTiming);
+for (const id of ['resolution', 'fps', 'duration', 'bitrate-mode']) {
+  $(id).addEventListener('change', () => quickPreview.settingsChanged());
+}
 $('random-bitrate').addEventListener('click', randomizeBitrate);
 $('render-location').addEventListener('change', updateEngineNotes);
 

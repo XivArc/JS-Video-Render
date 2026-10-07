@@ -1,3 +1,5 @@
+import { sourceForQuickRender } from './animation-reader.js';
+
 export const PREVIEW_TABS_HTML = '<div class="preview-tabs" role="tablist" aria-label="Preview source"><button id="preview-files-tab" type="button" role="tab" aria-selected="true" aria-controls="preview-files-content">Animation files</button><button id="quick-preview-tab" type="button" role="tab" aria-selected="false" aria-controls="quick-preview-content" tabindex="-1">Quick Preview <span>LIVE</span></button></div>';
 
 export const QUICK_PREVIEW_HTML = [
@@ -9,7 +11,7 @@ export const QUICK_PREVIEW_HTML = [
   '<div class="quick-actions"><div><button id="quick-example" class="secondary-button" type="button">Load example</button><button id="quick-restart" class="secondary-button" type="button" disabled>Restart preview</button><button id="quick-clear" class="secondary-button" type="button" disabled>Clear</button></div><button id="quick-use" class="quick-use-button" type="button" disabled>Use for render <span aria-hidden="true">↗</span></button></div>',
   '<p id="quick-status" class="quick-status" role="status" aria-live="polite">Paste code to start. Preview updates automatically after editing.</p>',
   '<p id="quick-editor-note" class="quick-note">Preview runs on this device. Use for render makes this code the single file in the render queue. Code stays in this tab until you submit a cloud render.</p>',
-  '<details class="quick-api"><summary>Supported Canvas code</summary><p>Paste the complete JavaScript file with its export. Supported: <code>meta + render(ctx, seconds, width, height)</code>, <code>meta + drawFrame(canvas, seconds)</code>, or an exported <code>draw(ctx, seconds, width, height)</code> function with <code>draw.meta</code>. Include width, height, FPS, and duration. Use trusted, self-contained Canvas code. Ctrl + Enter restarts the preview.</p></details>',
+  '<details class="quick-api"><summary>Supported Canvas code</summary><p>Paste a complete drawing function; exports are optional. Detected: <code>meta + render(ctx, seconds, width, height)</code>, <code>meta + drawFrame(canvas, seconds)</code>, or <code>draw(ctx, seconds, width, height)</code>, including named exports and <code>module.exports</code>/<code>exports</code>. Metadata can be in <code>meta</code>, <code>metadata</code>, <code>draw.meta</code>, or Canvas constants/config. Missing values use Export settings; Full animation defaults to 20 seconds. Use trusted, self-contained Canvas code. Ctrl + Enter restarts the preview.</p></details>',
   '</section>',
 ].join('\n');
 
@@ -44,7 +46,7 @@ draw.meta = { title: 'Quick Preview example', width: 1280, height: 720, fps: 30,
 module.exports = draw;
 `;
 
-export function makeQuickPreview({ makeBridge, onModeChange, onUse }) {
+export function makeQuickPreview({ makeBridge, onModeChange, onUse, readDefaults }) {
   const $ = id => document.getElementById(id);
   const editor = $('quick-code');
   const state = { active: false, bridge: null, revision: 0, timer: 0, raf: 0, meta: null,
@@ -161,7 +163,7 @@ export function makeQuickPreview({ makeBridge, onModeChange, onUse }) {
     state.bridge = bridge;
     status('Loading Canvas code…');
     try {
-      const meta = await bridge.call('load', { source, fileName: 'quick-preview.js', restrictedContext: 'Quick Preview' }, [], 4000);
+      const meta = await bridge.call('load', { source, fileName: 'quick-preview.js', restrictedContext: 'Quick Preview', previewDefaults: readDefaults() }, [], 4000);
       if (!current(revision, bridge)) return;
       state.meta = meta;
       state.time = 0;
@@ -171,7 +173,8 @@ export function makeQuickPreview({ makeBridge, onModeChange, onUse }) {
       state.source = source;
       $('quick-empty').hidden = true;
       $('quick-metadata').textContent = meta.title + ' · ' + meta.width + ' × ' + meta.height + ' · ' + meta.fps + ' FPS · ' + meta.duration + ' s';
-      status('Preview ready · motion starts automatically. Edit the code to update it.');
+      const defaults = meta.reader?.defaulted || [];
+      status(defaults.length ? 'Preview ready · ' + meta.reader.api + ' detected. Missing ' + defaults.join(', ') + ' use Export settings (Full animation defaults to 20 s). Values are included when you use this code for render.' : 'Preview ready · ' + meta.reader.api + ' detected. Motion starts automatically.');
       controls();
       play();
     } catch (error) { failure(error, revision, bridge); }
@@ -246,14 +249,17 @@ export function makeQuickPreview({ makeBridge, onModeChange, onUse }) {
   $('quick-seek').addEventListener('input', () => { pause(); void frame(Number($('quick-seek').value)); });
   $('quick-use').addEventListener('click', async () => {
     if ($('quick-use').disabled) return;
-    const source = state.source;
-    try { await onUse(source); }
+    try { await onUse(sourceForQuickRender(state.source, state.meta)); }
     catch (error) { status(error.message || String(error), true); }
   });
   controls();
   return {
     get active() { return state.active; },
     showFiles,
+    settingsChanged() {
+      if (state.active && editor.value.trim() && !state.editingBlocked &&
+          (!state.meta || state.meta.reader?.defaulted?.length)) schedule(true);
+    },
     setBlocked({ editing, using }) {
       const changed = state.editingBlocked !== editing;
       state.editingBlocked = editing;

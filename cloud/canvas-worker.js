@@ -1,5 +1,6 @@
 import { installCanvasAutoRepair } from '../src/canvas-auto-repair.js';
 import { animationTime } from '../src/duration-settings.js';
+import { readAnimation } from '../src/animation-reader.js';
 
 const repair = installCanvasAutoRepair();
 let animation, meta, canvas;
@@ -18,25 +19,7 @@ function restrictIO(source) {
 
 async function load(source, fileName) {
   restrictIO(source);
-  globalThis.SmartHomeAnimations = {};
-  const common = { exports: {} };
-  globalThis.module = common;
-  const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
-  repair.reset(fileName, url);
-  let imported;
-  try { imported = await import(/* @vite-ignore */ url); }
-  catch (error) { throw repair.annotate(error); }
-  finally { URL.revokeObjectURL(url); delete globalThis.module; }
-  const candidates = [imported.default, imported, common.exports, ...Object.values(globalThis.SmartHomeAnimations || {})];
-  animation = candidates.find(a =>
-    a?.meta && (typeof a.drawFrame === 'function' || typeof a.render === 'function'));
-  if (!animation) {
-    // Preserve object APIs, and adapt directly exported draw functions without
-    // rewriting the source or changing its Canvas, time, or dimension arguments.
-    const draw = candidates.find(a => typeof a === 'function' && a.meta);
-    if (draw) animation = { meta: draw.meta, render: (ctx, seconds, width, height) => draw(ctx, seconds, width, height) };
-  }
-  if (!animation) throw new Error('No animation API found. Export meta with drawFrame(canvas, seconds) or render(ctx, seconds), or a draw(ctx, seconds, width, height) function with draw.meta.');
+  animation = (await readAnimation(source, repair, fileName)).animation;
   for (const key of ['width', 'height', 'fps', 'duration']) {
     if (!Number.isFinite(animation.meta[key]) || animation.meta[key] <= 0) throw new Error('Invalid source metadata: ' + key);
   }

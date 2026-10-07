@@ -4,6 +4,7 @@ import {
 } from 'mediabunny';
 import { installCanvasAutoRepair } from './canvas-auto-repair.js';
 import { animationTime, validateDuration } from './duration-settings.js';
+import { readAnimation } from './animation-reader.js';
 
 let animation;
 let metadata;
@@ -14,37 +15,9 @@ function describe(error) {
   return { name: error.name || 'Error', message: error.message || String(error) };
 }
 
-async function loadAnimation(source, fileName) {
-  if (typeof source !== 'string' || source.length > 5_000_000) {
-    throw new Error('The JavaScript file must be smaller than 5 MB.');
-  }
-  globalThis.SmartHomeAnimations = {};
-  const common = { exports: {} };
-  globalThis.module = common;
-  const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
-  canvasRepair.reset(fileName, url);
-  let imported;
-  try {
-    imported = await import(/* @vite-ignore */ url);
-  } catch (error) {
-    throw canvasRepair.annotate(error);
-  } finally {
-    URL.revokeObjectURL(url);
-    delete globalThis.module;
-  }
-  const candidates = [imported.default, imported, common.exports,
-    ...Object.values(globalThis.SmartHomeAnimations || {})];
-  animation = candidates.find((a) => a && a.meta &&
-    (typeof a.drawFrame === 'function' || typeof a.render === 'function'));
-  if (!animation) {
-    // Standalone Canvas sources can export draw(ctx, seconds, width, height)
-    // directly, with their metadata attached to that function as draw.meta.
-    const draw = candidates.find(a => typeof a === 'function' && a.meta);
-    if (draw) animation = { meta: draw.meta, render: (ctx, seconds, width, height) => draw(ctx, seconds, width, height) };
-  }
-  if (!animation) {
-    throw new Error('No animation API was found. Export meta with drawFrame(canvas, seconds) or render(ctx, seconds), or a draw(ctx, seconds, width, height) function with draw.meta.');
-  }
+async function loadAnimation(source, fileName, previewDefaults) {
+  const loaded = await readAnimation(source, canvasRepair, fileName, previewDefaults);
+  animation = loaded.animation;
   const m = animation.meta;
   for (const key of ['width', 'height', 'fps', 'duration']) {
     if (!Number.isFinite(m[key]) || m[key] <= 0) {
@@ -59,6 +32,7 @@ async function loadAnimation(source, fileName) {
     title: String(m.title || m.id || 'Canvas animation').slice(0, 200),
     width: m.width, height: m.height, fps: m.fps, duration: m.duration,
     targetVideoBitrate: Number(m.targetVideoBitrate) || 12_000_000,
+    reader: loaded.reader,
   };
   return metadata;
 }
@@ -175,7 +149,8 @@ self.onmessage = async ({ data }) => {
   try {
     if (type === 'load') {
       if (payload.restricted) restrictAnimationIO(payload.source, payload.restrictedContext);
-      self.postMessage({ id, ok: true, result: await loadAnimation(payload.source, payload.fileName) });
+      self.postMessage({ id, ok: true, result: await loadAnimation(payload.source, payload.fileName,
+        payload.restrictedContext === 'Quick Preview' ? payload.previewDefaults : undefined) });
     } else if (type === 'draw') {
       const { width, height, time } = payload;
       if (!previewCanvas || previewCanvas.width !== width || previewCanvas.height !== height) {
