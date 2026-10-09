@@ -174,7 +174,8 @@ export function makeQuickPreview({ makeBridge, onModeChange, onUse, readDefaults
       $('quick-empty').hidden = true;
       $('quick-metadata').textContent = meta.title + ' · ' + meta.width + ' × ' + meta.height + ' · ' + meta.fps + ' FPS · ' + meta.duration + ' s';
       const defaults = meta.reader?.defaulted || [];
-      status(defaults.length ? 'Preview ready · ' + meta.reader.api + ' detected. Missing ' + defaults.join(', ') + ' use Export settings (Full animation defaults to 20 s). Values are included when you use this code for render.' : 'Preview ready · ' + meta.reader.api + ' detected. Motion starts automatically.');
+      const header = meta.reader?.header || [];
+      status(defaults.length ? 'Preview ready · ' + meta.reader.api + ' detected. Missing ' + defaults.join(', ') + ' use Export settings (Full animation defaults to 20 s). Values are included when you use this code for render.' : 'Preview ready · ' + meta.reader.api + ' detected.' + (header.length ? ' Metadata detected in source header.' : '') + ' Motion starts automatically.');
       controls();
       play();
     } catch (error) { failure(error, revision, bridge); }

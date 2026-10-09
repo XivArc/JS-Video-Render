@@ -23,7 +23,49 @@ function captureBindings() {
 const isObject = value => value !== null && (typeof value === 'object' || typeof value === 'function');
 const fields = ['width', 'height', 'fps', 'duration'];
 
-function resolveAnimation(imported, common, captured, previewDefaults) {
+// Only leading comments with explicit metadata labels are eligible. This
+// excludes drawing coordinates, string literals, and comments inside helpers.
+export function sourceHeaderMetadata(source) {
+  const text = source.slice(0, 16384), comments = [];
+  let offset = text.charCodeAt(0) === 0xfeff ? 1 : 0;
+  while (offset < text.length) {
+    while (/\s/.test(text[offset] || '') && offset < text.length) offset++;
+    if (text.startsWith('//', offset)) {
+      const end = text.indexOf('\n', offset);
+      comments.push(text.slice(offset + 2, end === -1 ? text.length : end));
+      offset = end === -1 ? text.length : end + 1;
+    } else if (text.startsWith('/*', offset)) {
+      const end = text.indexOf('*/', offset + 2);
+      if (end === -1) break;
+      comments.push(text.slice(offset + 2, end)); offset = end + 2;
+    } else break;
+  }
+  const values = Object.fromEntries(fields.map(key => [key, []]));
+  const add = (key, value) => {
+    const number = Number(value);
+    if (!values[key].includes(number)) values[key].push(number);
+  };
+  for (const raw of comments.join('\n').split(/\r?\n/)) {
+    const line = raw.trim().replace(/^\*\s?/, '');
+    const target = /^(?:(?:native\s+)?(?:video\s+)?export\s+target|(?:native\s+)?render\s+target|animation\s+metadata)\s*:/i.test(line);
+    if (target || /^(?:resolution|dimensions|size)\s*:/i.test(line)) {
+      const match = line.match(/(?:^|[^\w.+-])(-?\d+(?:\.\d+)?)\s*[x×]\s*(-?\d+(?:\.\d+)?)(?![\d.])/i);
+      if (match) { add('width', match[1]); add('height', match[2]); }
+    }
+    if (target || /^(?:fps|frame\s*rate)\s*:/i.test(line)) {
+      const match = line.match(/(?:^|[^\w.+-])(-?\d+(?:\.\d+)?)\s*fps\b/i) ||
+        line.match(/^(?:fps|frame\s*rate)\s*:\s*(-?\d+(?:\.\d+)?)(?:\s|$)/i);
+      if (match) add('fps', match[1]);
+    }
+    if (target || /^duration\s*:/i.test(line)) {
+      const match = line.match(/(?:^|[^\w.+-])(-?\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s)\b/i);
+      if (match) add('duration', match[1]);
+    }
+  }
+  return values;
+}
+
+function resolveAnimation(imported, common, captured, previewDefaults, header) {
   const candidates = [imported.default, imported, common.exports, common.exports?.default,
     ...Object.values(globalThis.SmartHomeAnimations || {}), captured.animation, captured];
   const existing = candidates.find(a => a?.meta && (typeof a.drawFrame === 'function' || typeof a.render === 'function')) ||
@@ -52,7 +94,7 @@ function resolveAnimation(imported, common, captured, previewDefaults) {
     captured.meta, captured.metadata, captured.META,
     owner.exportSettings, fn.exportSettings, owner.config, imported.config,
     captured.exportSettings, captured.EXPORT_SETTINGS, captured.config, captured.CONFIG, owner, fn, captured].filter(isObject);
-  const m = {}, defaulted = [];
+  const m = {}, defaulted = [], recovered = [];
   for (const key of ['id', 'title', 'targetVideoBitrate', ...fields]) {
     const aliases = key === 'fps' ? ['fps', 'frameRate'] : key === 'duration' ? ['duration', 'durationSeconds'] : [key];
     let found = false;
@@ -61,6 +103,10 @@ function resolveAnimation(imported, common, captured, previewDefaults) {
         if (item[name] !== undefined) { m[key] = item[name]; found = true; break; }
       }
       if (found) break;
+    }
+    if (!found && fields.includes(key) && header[key].length) {
+      if (header[key].length > 1) throw new Error('Conflicting source header metadata for ' + key + '. Provide one export target or explicit animation metadata.');
+      m[key] = header[key][0]; found = true; recovered.push(key);
     }
     if (!found && fields.includes(key) && previewDefaults?.[key] !== undefined) {
       m[key] = previewDefaults[key]; defaulted.push(key);
@@ -77,7 +123,7 @@ function resolveAnimation(imported, common, captured, previewDefaults) {
   const animation = { meta: m };
   if (api === 'drawFrame') animation.drawFrame = (canvas, seconds) => fn.call(owner, canvas, seconds);
   else animation.render = (ctx, seconds, width, height) => fn.call(owner, ctx, seconds, width, height);
-  return { animation, reader: { api, defaulted } };
+  return { animation, reader: { api, defaulted, header: recovered } };
 }
 
 export async function readAnimation(source, repair, fileName, previewDefaults) {
@@ -96,7 +142,7 @@ export async function readAnimation(source, repair, fileName, previewDefaults) {
   repair.reset(fileName, url);
   try {
     const imported = await import(/* @vite-ignore */ url);
-    return resolveAnimation(imported, common, globalThis[key] || {}, previewDefaults || common.__canvasPreviewDefaults);
+    return resolveAnimation(imported, common, globalThis[key] || {}, previewDefaults || common.__canvasPreviewDefaults, sourceHeaderMetadata(source));
   } catch (error) {
     if (/document is not defined|Cannot read properties of undefined.*(?:getElementById|querySelector)/.test(error.message)) {
       error.message += ' The Canvas reader needs a drawing function; HTML/DOM setup is not supported in the worker.';
