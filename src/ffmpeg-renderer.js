@@ -4,6 +4,7 @@ import coreScript from '@ffmpeg/core?url';
 import coreWasm from '@ffmpeg/core/wasm?url';
 import { getBitrateProfile, bitrateInProfile, bitrateHasNonRoundKbps, randomBitrate } from './bitrate-profiles.js';
 import { animationTime, validateDuration } from './duration-settings.js';
+import { animationDefaults } from './animation-reader.js';
 
 const MAX_OUTPUT_BYTES = 500_000_000;
 const MAX_WORKING_FILES_BYTES = 600_000_000;
@@ -18,7 +19,7 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
   const checkCancelled = () => { if (cancelled) throw abortError(); };
   const emit = (data) => { if (!cancelled) onEvent(data); };
 
-  async function run({ source, fileName, settings: s }) {
+  async function run({ source, fileName, settings: s, metadataDefaults }) {
     if (running) throw new Error('FFmpeg is already running.');
     running = true;
     const started = performance.now();
@@ -46,7 +47,8 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
         throw new Error('FFmpeg export is limited to approximately 500 MB or 30,000 frames. Reduce the duration or select a lower-resolution bitrate mode.');
       }
       canvasBridge = makeCanvasBridge();
-      const meta = await canvasBridge.call('load', { source, fileName }, [], 15_000);
+      const meta = await canvasBridge.call('load', { source, fileName,
+        metadataDefaults: metadataDefaults ?? animationDefaults(s) }, [], 15_000);
       validateDuration(meta.duration, s);
       checkCancelled();
       emit({ event: 'phase', phase: 'loading', message: 'Loading the local video encoder…' });

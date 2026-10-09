@@ -23,6 +23,17 @@ function captureBindings() {
 const isObject = value => value !== null && (typeof value === 'object' || typeof value === 'function');
 const fields = ['width', 'height', 'fps', 'duration'];
 
+// Export settings fill only missing source metadata. A source without duration
+// uses the selected duration, or 20 seconds when Full animation is selected.
+export function animationDefaults(settings = {}) {
+  return {
+    width: settings.width ?? 1920, height: settings.height ?? 1080,
+    fps: settings.fps ?? 30,
+    duration: settings.durationChoice === 'full' ? 20 :
+      settings.durationChoice !== undefined ? Number(settings.durationChoice) : settings.duration ?? 20,
+  };
+}
+
 // Only leading comments with explicit metadata labels are eligible. This
 // excludes drawing coordinates, string literals, and comments inside helpers.
 export function sourceHeaderMetadata(source) {
@@ -65,7 +76,7 @@ export function sourceHeaderMetadata(source) {
   return values;
 }
 
-function resolveAnimation(imported, common, captured, previewDefaults, header) {
+function resolveAnimation(imported, common, captured, metadataDefaults, header) {
   const candidates = [imported.default, imported, common.exports, common.exports?.default,
     ...Object.values(globalThis.SmartHomeAnimations || {}), captured.animation, captured];
   const existing = candidates.find(a => a?.meta && (typeof a.drawFrame === 'function' || typeof a.render === 'function')) ||
@@ -108,8 +119,8 @@ function resolveAnimation(imported, common, captured, previewDefaults, header) {
       if (header[key].length > 1) throw new Error('Conflicting source header metadata for ' + key + '. Provide one export target or explicit animation metadata.');
       m[key] = header[key][0]; found = true; recovered.push(key);
     }
-    if (!found && fields.includes(key) && previewDefaults?.[key] !== undefined) {
-      m[key] = previewDefaults[key]; defaulted.push(key);
+    if (!found && fields.includes(key) && metadataDefaults?.[key] !== undefined) {
+      m[key] = metadataDefaults[key]; defaulted.push(key);
     }
   }
   const missing = fields.filter(key => m[key] === undefined);
@@ -126,7 +137,7 @@ function resolveAnimation(imported, common, captured, previewDefaults, header) {
   return { animation, reader: { api, defaulted, header: recovered } };
 }
 
-export async function readAnimation(source, repair, fileName, previewDefaults) {
+export async function readAnimation(source, repair, fileName, metadataDefaults) {
   if (typeof source !== 'string' || source.length > 5_000_000) throw new Error('The JavaScript file must be smaller than 5 MB.');
   globalThis.SmartHomeAnimations = {};
   const common = { exports: {} }, key = '__canvas_reader_' + crypto.randomUUID();
@@ -142,7 +153,10 @@ export async function readAnimation(source, repair, fileName, previewDefaults) {
   repair.reset(fileName, url);
   try {
     const imported = await import(/* @vite-ignore */ url);
-    return resolveAnimation(imported, common, globalThis[key] || {}, previewDefaults || common.__canvasPreviewDefaults, sourceHeaderMetadata(source));
+    // Keep the source timing already accepted through Use for render, even if
+    // the user subsequently changes output settings. No source file is edited.
+    const defaults = { ...metadataDefaults, ...common.__canvasPreviewDefaults };
+    return resolveAnimation(imported, common, globalThis[key] || {}, defaults, sourceHeaderMetadata(source));
   } catch (error) {
     if (/document is not defined|Cannot read properties of undefined.*(?:getElementById|querySelector)/.test(error.message)) {
       error.message += ' The Canvas reader needs a drawing function; HTML/DOM setup is not supported in the worker.';

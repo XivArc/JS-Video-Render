@@ -9,6 +9,7 @@ import { chromium } from 'playwright';
 import { validateCloudJob, MAX_CLOUD_JOB_BYTES } from '../src/cloud-job.js';
 import { getBitrateProfile, randomBitrate, bitrateInProfile, bitrateHasNonRoundKbps } from '../src/bitrate-profiles.js';
 import { durationSettings } from '../src/duration-settings.js';
+import { animationDefaults } from '../src/animation-reader.js';
 import { outputFileName, uniqueOutputName } from '../src/render-queue.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -156,8 +157,13 @@ async function renderFile(file, job, index, used) {
   try {
     if (cancelled) throw new Error('Cloud render cancelled.');
     log('File ' + (index + 1) + '/' + job.files.length + ': ' + file.fileName);
-    const meta = await page.evaluate(({ source, name }) => window.loadAnimation(source, name), { source: file.source, name: file.fileName });
     const profile = getBitrateProfile(job.settings.bitrateMode);
+    const loadPayload = { source: file.source, name: file.fileName,
+      metadataDefaults: animationDefaults({ ...job.settings, width: profile.width, height: profile.height }) };
+    const loadSource = () => page.evaluate(({ source, name, metadataDefaults }) =>
+      window.loadAnimation(source, name, metadataDefaults), loadPayload);
+    const meta = await loadSource();
+    record.sourceMetadata = meta;
     const settings = { ...job.settings, width: profile.width, height: profile.height,
       ...durationSettings(meta.duration, job.settings.durationChoice, job.settings.fps) };
     if (settings.duration * settings.fps < 1 || settings.duration * settings.fps > 30000) throw new Error('Cloud export supports 1–30,000 frames per video.');
@@ -176,7 +182,7 @@ async function renderFile(file, job, index, used) {
         throw new Error('Cloud output exceeds the available disk budget (2 GB/video, 8 GB/job). Choose fewer files or a shorter duration.');
       }
       settings.bitrate = target;
-      if (attempt > 1) await page.evaluate(({ source, name }) => window.loadAnimation(source, name), { source: file.source, name: file.fileName });
+      if (attempt > 1) await loadSource();
       log(settings.width + 'x' + settings.height + ' · ' + settings.fps + ' FPS · ' + settings.duration + ' s · target ' + (target / 1e6).toFixed(3) + ' Mbps');
       const metrics = await encode(file.source, file.fileName, settings, path, meta);
       const verified = inspect(path, settings, target);

@@ -17,9 +17,10 @@ function restrictIO(source) {
   }
 }
 
-async function load(source, fileName) {
+async function load(source, fileName, metadataDefaults) {
   restrictIO(source);
-  animation = (await readAnimation(source, repair, fileName)).animation;
+  const loaded = await readAnimation(source, repair, fileName, metadataDefaults);
+  animation = loaded.animation;
   for (const key of ['width', 'height', 'fps', 'duration']) {
     if (!Number.isFinite(animation.meta[key]) || animation.meta[key] <= 0) throw new Error('Invalid source metadata: ' + key);
   }
@@ -27,14 +28,14 @@ async function load(source, fileName) {
     throw new Error('Source metadata exceeds supported limits.');
   }
   meta = { width: animation.meta.width, height: animation.meta.height, fps: animation.meta.fps, duration: animation.meta.duration,
-    title: String(animation.meta.title || animation.meta.id || fileName).slice(0, 200) };
+    title: String(animation.meta.title || animation.meta.id || fileName).slice(0, 200), reader: loaded.reader };
   return meta;
 }
 
 self.onmessage = async ({ data: { id, type, payload } }) => {
   try {
     if (type === 'load') {
-      self.postMessage({ id, ok: true, result: await load(payload.source, payload.fileName) });
+      self.postMessage({ id, ok: true, result: await load(payload.source, payload.fileName, payload.metadataDefaults) });
     } else if (type === 'frame') {
       const { width, height, fps, frame, duration, durationMode } = payload;
       if (![width, height, fps, frame].every(Number.isInteger) || width < 16 || height < 16 || width > 4096 || height > 4096 ||

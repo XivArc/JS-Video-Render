@@ -4,7 +4,7 @@ import {
 } from 'mediabunny';
 import { installCanvasAutoRepair } from './canvas-auto-repair.js';
 import { animationTime, validateDuration } from './duration-settings.js';
-import { readAnimation } from './animation-reader.js';
+import { readAnimation, animationDefaults } from './animation-reader.js';
 
 let animation;
 let metadata;
@@ -15,8 +15,8 @@ function describe(error) {
   return { name: error.name || 'Error', message: error.message || String(error) };
 }
 
-async function loadAnimation(source, fileName, previewDefaults) {
-  const loaded = await readAnimation(source, canvasRepair, fileName, previewDefaults);
+async function loadAnimation(source, fileName, metadataDefaults) {
+  const loaded = await readAnimation(source, canvasRepair, fileName, metadataDefaults);
   animation = loaded.animation;
   const m = animation.meta;
   for (const key of ['width', 'height', 'fps', 'duration']) {
@@ -95,9 +95,9 @@ async function codecConfig(s) {
   throw new Error('H.264 is unsupported for these settings. Lower the resolution, frame rate, or bitrate and try again.');
 }
 
-async function exportVideo(id, source, settings, stream, fileName) {
+async function exportVideo(id, source, settings, stream, fileName, metadataDefaults) {
   const s = validate(settings);
-  await loadAnimation(source, fileName);
+  await loadAnimation(source, fileName, metadataDefaults ?? animationDefaults(s));
   validateDuration(metadata.duration, s);
   const config = await codecConfig(s);
   const canvas = new OffscreenCanvas(s.width, s.height);
@@ -150,7 +150,7 @@ self.onmessage = async ({ data }) => {
     if (type === 'load') {
       if (payload.restricted) restrictAnimationIO(payload.source, payload.restrictedContext);
       self.postMessage({ id, ok: true, result: await loadAnimation(payload.source, payload.fileName,
-        payload.restrictedContext === 'Quick Preview' ? payload.previewDefaults : undefined) });
+        payload.metadataDefaults ?? payload.previewDefaults) });
     } else if (type === 'draw') {
       const { width, height, time } = payload;
       if (!previewCanvas || previewCanvas.width !== width || previewCanvas.height !== height) {
@@ -189,7 +189,7 @@ self.onmessage = async ({ data }) => {
       await codecConfig(validate(payload.settings));
       self.postMessage({ id, ok: true, result: { supported: true } });
     } else if (type === 'export') {
-      await exportVideo(id, payload.source, payload.settings, payload.stream, payload.fileName);
+      await exportVideo(id, payload.source, payload.settings, payload.stream, payload.fileName, payload.metadataDefaults);
     } else throw new Error('Unknown renderer command.');
   } catch (error) {
     self.postMessage({ id, ok: false, error: describe(error) });

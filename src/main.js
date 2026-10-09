@@ -6,6 +6,7 @@ import { MAX_AI_SOURCE_BYTES, repairEndpoint, callRepairBackend, applyRepairEdit
 import { FIXED_DURATIONS, durationSettings, animationTime } from './duration-settings.js';
 import { CLOUD_PANEL_HTML, makeCloudControls } from './cloud-controls.js';
 import { PREVIEW_TABS_HTML, QUICK_PREVIEW_HTML, makeQuickPreview } from './quick-preview.js';
+import { animationDefaults } from './animation-reader.js';
 
 document.title = 'Canvas Video Studio';
 document.documentElement.lang = 'en';
@@ -59,7 +60,7 @@ const state = {
   playing: false, raf: 0, time: 0, origin: 0, originTime: 0,
   drawing: false, pendingTime: null, loading: false, busy: false, cancelRequested: false, fileStream: null,
   activeSettings: null, lastRenderBitrate: null, jobs: [], currentJob: null, preparing: null, repairing: null,
-  cloudQueueJobId: null,
+  cloudQueueJobId: null, previewJob: null,
 };
 const queue = createRenderQueue($('render-queue'), job => loadPreview(job), repairJob, restoreOriginal);
 let quickPreview;
@@ -165,6 +166,13 @@ function exportPreferences() {
   return preferences;
 }
 
+function readAnimationDefaults(preferences) {
+  if (preferences) return animationDefaults(preferences);
+  const profile = getBitrateProfile($('bitrate-mode').value);
+  return animationDefaults({ width: profile.width, height: profile.height,
+    fps: Number($('fps').value), durationChoice: $('duration').value });
+}
+
 function settingsFor(meta, preferences, bitrate = preferences.bitrate) {
   return {
     format: preferences.format, width: preferences.width, height: preferences.height, fps: preferences.fps,
@@ -239,7 +247,9 @@ function previewTiming() {
 function updateDurationNote() {
   const choice = $('duration').value;
   if (choice === 'full') {
-    $('duration-note').textContent = 'Full animation uses each file’s original duration.';
+    $('duration-note').textContent = state.meta?.reader?.defaulted?.includes('duration') ?
+      'No source duration found. Full animation uses ' + state.meta.duration + ' seconds. Choose a duration to set the clip length.' :
+      'Full animation uses each file’s original duration. Files without duration use 20 seconds.';
   } else if (FIXED_DURATIONS.includes(Number(choice))) {
     const speed = state.meta ? ' · ' + (state.meta.duration / Number(choice)).toFixed(2) + '× speed' : '';
     $('duration-note').textContent = 'Full animation fitted to ' + choice + ' seconds' + speed + '. Preview uses the same timing. Applies to every file in the queue.';
@@ -321,13 +331,12 @@ $('capabilities').classList.toggle('unsupported', !browserReady);
 
 quickPreview = makeQuickPreview({
   makeBridge: () => makeBridge(undefined, true),
-  readDefaults: () => {
-    const dimensions = $('resolution').value === 'native' ?
-      [state.meta?.width, state.meta?.height] : $('resolution').value.split('x').map(Number);
-    return { width: dimensions[0] || 1920, height: dimensions[1] || 1080,
-      fps: Number($('fps').value), duration: Number($('duration').value) || 20 };
+  readDefaults: readAnimationDefaults,
+  onModeChange: active => {
+    pause(); $('source-badge').hidden = active;
+    document.querySelector('.preview-panel').classList.toggle('quick-mode', active); updateControls();
+    if (!active) refreshAnimationDefaults();
   },
-  onModeChange: active => { pause(); $('source-badge').hidden = active; document.querySelector('.preview-panel').classList.toggle('quick-mode', active); updateControls(); },
   onUse: source => selectFiles([new File([source], 'quick-preview.js', { type: 'text/javascript' })]),
 });
 
@@ -486,6 +495,8 @@ $('ai-check').addEventListener('click', async () => {
 
 async function loadPreview(job, initial = false) {
   if (state.busy || state.loading) return;
+  state.loading = true;
+  state.previewJob = job;
   quickPreview.showFiles();
   pause();
   updateRepairDetails({ repairedCalls: 0 });
@@ -493,7 +504,6 @@ async function loadPreview(job, initial = false) {
   if (state.preview) state.preview.dispose();
   state.preview = null;
   state.meta = null;
-  state.loading = true;
   $('source-badge').textContent = 'Loading…';
   $('source-badge').classList.remove('loaded');
   state.drawing = false;
@@ -506,11 +516,13 @@ async function loadPreview(job, initial = false) {
     state.source = await jobSource(job);
     state.fileName = job.file.name;
     state.preview = makeBridge(undefined, job.repaired);
-    state.meta = await state.preview.call('load', { source: state.source, fileName: state.fileName }, [], 15000);
+    state.meta = await state.preview.call('load', { source: state.source, fileName: state.fileName,
+      metadataDefaults: readAnimationDefaults() }, [], 15000);
     job.meta = state.meta;
     $('animation-title').textContent = state.meta.title;
     $('metadata').textContent = state.meta.width + ' × ' + state.meta.height + ' · ' +
-      state.meta.fps + ' FPS · ' + state.meta.duration + ' seconds';
+      state.meta.fps + ' FPS · ' + state.meta.duration + ' seconds' +
+      (state.meta.reader.defaulted.length ? ' · Missing metadata uses Export settings' : '');
     $('source-badge').textContent = state.jobs.length > 1 ? 'Preview · ' + job.file.name : 'File loaded';
     $('source-badge').classList.add('loaded');
     $('empty-state').hidden = true;
@@ -644,8 +656,15 @@ $('bitrate-mode').addEventListener('change', () => updateBitrateMode());
 $('resolution').addEventListener('change', updateResolutionMode);
 $('duration').addEventListener('change', updatePreviewTiming);
 $('fps').addEventListener('change', updatePreviewTiming);
+function refreshAnimationDefaults() {
+  if (state.busy || state.loading || cloudControls.running || cloudControls.connecting) return;
+  for (const job of state.jobs) if (job.meta?.reader?.defaulted?.length) job.meta = null;
+  if (!quickPreview.active && state.previewJob && state.meta?.reader?.defaulted?.length) {
+    void loadPreview(state.previewJob);
+  }
+}
 for (const id of ['resolution', 'fps', 'duration', 'bitrate-mode']) {
-  $(id).addEventListener('change', () => quickPreview.settingsChanged());
+  $(id).addEventListener('change', () => { quickPreview.settingsChanged(); refreshAnimationDefaults(); });
 }
 $('random-bitrate').addEventListener('click', randomizeBitrate);
 $('render-location').addEventListener('change', updateEngineNotes);
@@ -764,13 +783,14 @@ function checkCancelled() {
   if (state.cancelRequested) throw new DOMException('Render cancelled.', 'AbortError');
 }
 
-async function prepareJob(job) {
+async function prepareJob(job, preferences) {
   const source = await jobSource(job);
   checkCancelled();
-  if (!job.meta) {
+  if (!job.meta || job.meta.reader?.defaulted?.length) {
     const bridge = makeBridge(undefined, job.repaired);
     state.preparing = bridge;
-    try { job.meta = await bridge.call('load', { source, fileName: job.file.name }, [], 15000); }
+    try { job.meta = await bridge.call('load', { source, fileName: job.file.name,
+      metadataDefaults: readAnimationDefaults(preferences) }, [], 15000); }
     finally {
       bridge.dispose();
       if (state.preparing === bridge) state.preparing = null;
@@ -821,7 +841,7 @@ async function renderJob(job, preferences, bitrate, directory, diskNames) {
   $('bitrate').value = (bitrate / 1_000_000).toFixed(3);
   renderStatus('Loading animation…', job);
   try {
-    const source = await prepareJob(job);
+    const source = await prepareJob(job, preferences);
     const s = settingsFor(job.meta, preferences, bitrate);
     state.activeSettings = s;
     state.lastRenderBitrate = bitrate;
@@ -837,7 +857,8 @@ async function renderJob(job, preferences, bitrate, directory, diskNames) {
     renderStatus('Rendering ' + s.format.toUpperCase() + '…', job);
     setMessage(job.file.name + ' · ' + s.width + ' × ' + s.height + ' · ' + s.fps + ' FPS · ' +
       s.duration + ' seconds. Rendering runs on this device.');
-    const result = await exporter.call('export', { source, fileName: job.file.name, settings: s });
+    const result = await exporter.call('export', { source, fileName: job.file.name, settings: s,
+      metadataDefaults: job.meta });
     checkCancelled();
     if (result.engine !== 'ffmpeg' || !result.bitrateVerified || !bitrateInProfile(result.videoBitrate, s.bitrateMode) || !bitrateHasNonRoundKbps(result.videoBitrate)) {
       throw new Error('The video bitrate did not pass the selected Auto Random range. No output file was saved.');

@@ -41,9 +41,19 @@ browser: `meta` plus `drawFrame(canvas, seconds)` or
 `globalThis.SmartHomeAnimations[id]`.
 It also accepts a directly exported `draw(ctx, seconds, width, height)` function
 with `draw.meta` through the same export mechanisms. The function adapter does
-not rewrite source or timing; required metadata and limits are still checked.
+not rewrite source or timing; resolved metadata and limits are still checked.
 The chosen Auto Random profile controls dimensions and verified bitrate,
 including for sources that attach their own `draw.exportSettings`.
+
+Metadata is optional for complete draw/render/drawFrame functions. Missing
+width/height use the selected Auto Random profile; missing FPS uses the chosen
+frame rate; missing duration uses the selected duration or 20 seconds for Full
+animation. Explicit source metadata and recognized leading header labels take
+precedence. Invalid declared values and conflicting headers still fail that
+file and allow the next source to run. Source JS is never rewritten. Metadata
+defaults are passed separately to the worker and reused for bitrate retries.
+Each result's `sourceMetadata.reader` identifies which fields used defaults
+or header recovery. See `../METADATA_FALLBACK_FIX_ID.txt` for installation.
 
 Jobs accept 1–10 sources, each up to 5 MB in UTF-8, and a total JSON size of
 20 MB. Sources must be trusted, self-contained Canvas JavaScript. Imports,

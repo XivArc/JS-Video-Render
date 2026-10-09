@@ -11,7 +11,7 @@ const call = (type, payload) => new Promise((resolve, reject) => {
   requests.set(id, { resolve, reject, timer });
   worker.postMessage({ id, type, payload });
 });
-window.loadAnimation = async (source, fileName) => {
+window.loadAnimation = async (source, fileName, metadataDefaults) => {
   stop(); controller = new AbortController();
   worker = new Worker('/cloud/canvas-worker.js', { type: 'module' });
   worker.onmessage = ({ data }) => {
@@ -21,7 +21,7 @@ window.loadAnimation = async (source, fileName) => {
     else request.reject(new Error(data.error.message));
   };
   worker.onerror = () => stop();
-  return call('load', { source, fileName });
+  return call('load', { source, fileName, metadataDefaults });
 };
 window.streamFrames = async (settings, token) => {
   const started = performance.now(); let drawingMs = 0, report;
