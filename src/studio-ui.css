@@ -1,13 +1,13 @@
-/* Prysm identity. The crystal has eight SVG facets in a true CSS 3D scene. */
+/* Rigid glass pyramid: one fixed vertical axis, no roll, wobble, or scale keys. */
 .brand-mark::before, .brand-mark::after { content: none; }
 .brand-mark svg { width: 39px; height: 47px; overflow: visible; filter: drop-shadow(0 0 10px #8c6cdf30); }
 .brand-name strong { letter-spacing: 3px; }
 .brand-name > span { letter-spacing: 2px; }
 .prism-art { padding: 0; isolation: isolate; }
 .prism-stage { position: relative; width: 290px; height: 278px; perspective: 850px; }
-.prism-crystal { position: absolute; top: 48%; left: 50%; width: 0; height: 0; transform-style: preserve-3d; animation: prysm-spin 3.4s linear infinite; animation-play-state: paused; }
-.prism-face { position: absolute; display: block; top: 0; left: 0; max-width: none; transform-origin: 0 0; backface-visibility: hidden; overflow: visible; }
-.prism-face-base { opacity: .96; }
+.prism-crystal { position: absolute; top: 48%; left: 50%; width: 0; height: 0; transform-origin: 0 0 0; transform-style: preserve-3d; animation: prysm-spin 1s linear infinite; animation-play-state: paused; }
+.prism-face { position: absolute; display: block; top: 0; left: 0; max-width: none; transform-origin: 0 0; backface-visibility: visible; overflow: visible; }
+.prism-face-base { opacity: 1; }
 .prism-aura { position: absolute; inset: -6px; border-radius: 50%; background: radial-gradient(ellipse, #a884f525 0%, #62d6ff10 39%, transparent 68%); transition: opacity .5s; }
 .prism-stage .prism-orbit { z-index: -1; width: 250px; height: 250px; top: 8px; left: 20px; border-color: #b77af421; }
 .prism-stage .orbit-two { width: 280px; height: 155px; left: 5px; top: 58px; transform: rotate(-27deg); border-color: #66dcec1b; }
@@ -24,8 +24,8 @@
 .prism-art[data-render-state='queued'] .prism-state { color: #d5b8fa; }
 .prism-art[data-render-state='queued'] .prism-state i { background: #b68ce9; }
 @keyframes prysm-spin {
-  from { transform: rotateX(-12deg) rotateY(-25deg) rotateZ(-9deg); }
-  to { transform: rotateX(-12deg) rotateY(335deg) rotateZ(-9deg); }
+  from { transform: rotateX(-23deg) rotateY(-45deg); }
+  to { transform: rotateX(-23deg) rotateY(315deg); }
 }
 
 /* One viewport contains the canvas and its original playback controls. */
@@ -79,5 +79,5 @@
   .preview-viewport.is-fullscreen .fullscreen-button { min-width: 34px; min-height: 34px; padding: 7px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .prism-art .prism-crystal { animation: none; transform: rotateX(-12deg) rotateY(-25deg) rotateZ(-9deg); }
+  .prism-art .prism-crystal { animation: none; transform: rotateX(-23deg) rotateY(-45deg); }
 }
