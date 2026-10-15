@@ -1,4 +1,4 @@
-name: Deploy Canvas Video Studio to GitHub Pages
+name: Deploy Prysm Motion Studio to GitHub Pages
 
 on:
   push:
