@@ -1,5 +1,6 @@
 import { sourceForQuickRender } from './animation-reader.js';
 import { fullscreenButton, makePreviewFullscreen } from './preview-fullscreen.js';
+import { makePreviewResolution } from './preview-resolution.js';
 
 export const PREVIEW_TABS_HTML = '<div class="preview-tabs" role="tablist" aria-label="Preview source"><button id="preview-files-tab" type="button" role="tab" aria-selected="true" aria-controls="preview-files-content">Animation files</button><button id="quick-preview-tab" type="button" role="tab" aria-selected="false" aria-controls="quick-preview-content" tabindex="-1">Quick Preview <span>LIVE</span></button></div>';
 
@@ -56,6 +57,9 @@ export function makeQuickPreview({ makeBridge, onModeChange, onUse, readDefaults
   const state = { active: false, bridge: null, revision: 0, timer: 0, raf: 0, meta: null,
     ready: false, playing: false, drawing: false, pendingTime: null, time: 0, origin: 0, originTime: 0,
     lastFrameAt: -Infinity, source: '', bytes: 0, editingBlocked: false, useBlocked: false };
+  const resolution = makePreviewResolution($('quick-canvas'), () => {
+    if (state.active && state.ready && !state.drawing && resolution.needsRedraw(state.meta)) void frame(state.time);
+  });
 
   function status(text, error = false) {
     $('quick-status').textContent = String(text).slice(0, 5000);
@@ -109,22 +113,23 @@ export function makeQuickPreview({ makeBridge, onModeChange, onUse, readDefaults
   async function frame(time, revision = state.revision, bridge = state.bridge) {
     if (!state.meta || !current(revision, bridge)) return false;
     if (state.drawing) { state.pendingTime = time; return false; }
+    const dimensions = resolution.size(state.meta);
+    if (!dimensions) return false;
     state.drawing = true;
-    const scale = Math.min(960 / state.meta.width, 540 / state.meta.height, 1);
-    const width = Math.max(1, Math.round(state.meta.width * scale));
-    const height = Math.max(1, Math.round(state.meta.height * scale));
+    const { width, height } = dimensions;
+    let drawn = false;
     try {
-      const result = await bridge.call('draw', { width, height, time }, [], 2000);
+      const result = await bridge.call('draw', { width, height, time }, [], 10000);
       if (!current(revision, bridge)) { result.bitmap.close(); return false; }
       const canvas = $('quick-canvas');
       try {
         if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
         canvas.getContext('2d').drawImage(result.bitmap, 0, 0);
       } finally { result.bitmap.close(); }
-      $('quick-stage').style.aspectRatio = width + ' / ' + height;
       state.time = time;
       $('quick-seek').value = time;
       $('quick-time').textContent = time.toFixed(2) + ' / ' + state.meta.duration.toFixed(2) + ' s';
+      drawn = true;
       return true;
     } catch (error) { failure(error, revision, bridge); return false; }
     finally {
@@ -134,6 +139,8 @@ export function makeQuickPreview({ makeBridge, onModeChange, onUse, readDefaults
           const nextTime = state.pendingTime;
           state.pendingTime = null;
           void frame(nextTime, revision, bridge);
+        } else if (drawn && resolution.needsRedraw(state.meta)) {
+          void frame(state.time, revision, bridge);
         }
       }
     }
@@ -171,6 +178,7 @@ export function makeQuickPreview({ makeBridge, onModeChange, onUse, readDefaults
       if (!current(revision, bridge)) return;
       state.meta = meta;
       state.time = 0;
+      $('quick-stage').style.aspectRatio = meta.width + ' / ' + meta.height;
       $('quick-seek').max = meta.duration;
       if (!await frame(0, revision, bridge) || !current(revision, bridge)) return;
       state.ready = true;

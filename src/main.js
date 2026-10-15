@@ -1,6 +1,7 @@
 import './style.css';
 import './studio-ui.css';
 import { fullscreenButton, makePreviewFullscreen } from './preview-fullscreen.js';
+import { makePreviewResolution } from './preview-resolution.js';
 import { BRAND_MARK_HTML, PRISM_ART_HTML, makePrismAnimation } from './prism-art.js';
 import { makeFfmpegBridge } from './ffmpeg-renderer.js';
 import { BITRATE_PROFILES, getBitrateProfile, profileForDimensions, randomBitrate, bitrateInProfile, bitrateHasNonRoundKbps } from './bitrate-profiles.js';
@@ -69,6 +70,9 @@ const state = {
   activeSettings: null, lastRenderBitrate: null, jobs: [], currentJob: null, preparing: null, repairing: null,
   cloudQueueJobId: null, previewJob: null,
 };
+const fileResolution = makePreviewResolution($('preview'), () => {
+  if (state.preview && !state.drawing && fileResolution.needsRedraw(state.meta)) void draw(state.time);
+});
 const queue = createRenderQueue($('render-queue'), job => loadPreview(job), repairJob, restoreOriginal);
 let quickPreview;
 const isCloud = () => $('render-location').value === 'cloud';
@@ -280,10 +284,12 @@ function updatePreviewTiming() {
 async function draw(time) {
   if (!state.preview || !state.meta) return;
   if (state.drawing) { state.pendingTime = time; return; }
+  const dimensions = fileResolution.size(state.meta);
+  if (!dimensions) return false;
   const bridge = state.preview;
   state.drawing = true;
-  const width = Math.min(960, Math.round(540 * state.meta.width / state.meta.height));
-  const height = Math.round(width * state.meta.height / state.meta.width);
+  const { width, height } = dimensions;
+  let drawn = false;
   try {
     const timing = previewTiming();
     time = Math.max(0, Math.min(timing.duration, time));
@@ -291,14 +297,16 @@ async function draw(time) {
     const { bitmap, canvasRepair } = await bridge.call('draw', { width, height, time: sourceTime }, [], 10000);
     if (bridge !== state.preview) { bitmap.close(); return; }
     const canvas = $('preview');
-    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
-    canvas.getContext('2d').drawImage(bitmap, 0, 0);
-    bitmap.close();
+    try {
+      if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+      canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    } finally { bitmap.close(); }
     $('canvas-repair-note').textContent = canvasRepair?.repairedCalls ? repairText(canvasRepair) :
       'Canvas auto-repair is on. Coordinate arrays and point objects are unpacked automatically.';
     state.time = time;
     $('seek').value = time;
     $('time').textContent = time.toFixed(2) + ' / ' + timing.duration.toFixed(2) + ' s';
+    drawn = true;
     return true;
   } catch (error) {
     if (bridge === state.preview && error.name !== 'AbortError') {
@@ -313,6 +321,10 @@ async function draw(time) {
         const nextTime = state.pendingTime;
         state.pendingTime = null;
         void draw(nextTime);
+      } else if (drawn && fileResolution.needsRedraw(state.meta)) {
+        // A resize may finish while the worker is drawing. Keep the latest
+        // frame time and redraw it once at the new resolution, even if paused.
+        void draw(state.time);
       }
     }
   }
@@ -549,7 +561,7 @@ async function loadPreview(job, initial = false) {
     }
     $('stage').style.aspectRatio = state.meta.width + ' / ' + state.meta.height;
     $('status').textContent = state.jobs.length > 1 ? state.jobs.length + ' files ready to render' : 'Animation ready to export';
-    setMessage(state.jobs.length > 1 ? 'One set of export settings applies to every file. Choose a fixed duration to fit each full animation to the same length. Choose Render ' + state.jobs.length + ' videos to start the queue.' : 'The preview uses a lower resolution and follows your selected duration. Your video uses the export settings. For a quick test, choose FFmpeg, 720p, 30 FPS, and 2 seconds.');
+    setMessage(state.jobs.length > 1 ? 'One set of export settings applies to every file. Choose a fixed duration to fit each full animation to the same length. Choose Render ' + state.jobs.length + ' videos to start the queue.' : 'Preview resolution adapts to your display, up to 4K, and follows your selected duration. Your video uses the export settings. For a quick test, choose FFmpeg, 720p, 30 FPS, and 2 seconds.');
     updateEngineNotes();
     const drawn = await draw(Math.min(2, previewTiming().duration));
     if (!drawn && job.status === 'pending') {
