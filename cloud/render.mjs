@@ -212,7 +212,7 @@ async function saveReport() {
   report.failed = report.files.filter(file => file.status !== 'completed').length;
   await writeFile(resolve(outDir, 'report.json'), JSON.stringify(report, null, 2));
   const escape = value => clean(value).replace(/[&<>|`]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '|': '&#124;', '`': '&#96;' })[char]);
-  const lines = ['# Canvas Video Studio · cloud render', '',
+  const lines = ['# Prysm Motion Studio · cloud render', '',
     'Native FFmpeg on CPU. Pipeline FPS includes drawing, frame transfer, and encoding; these stages overlap.', '',
     '| File | Result | Duration | Frames | Video bitrate | Pipeline FPS |', '| --- | --- | ---: | ---: | ---: | ---: |',
     ...report.files.map(file => '| ' + escape(file.fileName) + ' | ' + (file.status === 'completed' ? '✅ Completed' : '❌ Failed') + ' | ' +

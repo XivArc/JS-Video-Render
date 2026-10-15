@@ -1,4 +1,7 @@
 import './style.css';
+import './studio-ui.css';
+import { fullscreenButton, makePreviewFullscreen } from './preview-fullscreen.js';
+import { BRAND_MARK_HTML, PRISM_ART_HTML, makePrismAnimation } from './prism-art.js';
 import { makeFfmpegBridge } from './ffmpeg-renderer.js';
 import { BITRATE_PROFILES, getBitrateProfile, profileForDimensions, randomBitrate, bitrateInProfile, bitrateHasNonRoundKbps } from './bitrate-profiles.js';
 import { MAX_QUEUE_FILES, createRenderQueue, outputFileName, uniqueOutputName } from './render-queue.js';
@@ -8,7 +11,7 @@ import { CLOUD_PANEL_HTML, makeCloudControls } from './cloud-controls.js';
 import { PREVIEW_TABS_HTML, QUICK_PREVIEW_HTML, makeQuickPreview } from './quick-preview.js';
 import { animationDefaults } from './animation-reader.js';
 
-document.title = 'Canvas Video Studio';
+document.title = 'Prysm Motion Studio';
 document.documentElement.lang = 'en';
 
 const uploadIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M5 14v5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5"/></svg>';
@@ -20,14 +23,16 @@ const durationOptions = FIXED_DURATIONS.map(seconds =>
 
 document.querySelector('#app').innerHTML = [
   '<main class="studio" id="top">',
-  '<header class="topbar"><a class="brand" href="#top" aria-label="Canvas Video Studio home"><span class="brand-mark" aria-hidden="true"><i></i></span><span class="brand-name"><strong>CANVAS</strong><span>VIDEO STUDIO</span></span></a><nav class="nav-links" aria-label="Studio navigation"><a href="#workspace">Studio</a><a href="#export-settings">Export</a><a href="#render-status">Status</a></nav><span class="local-badge"><i></i>Runs on your device</span></header>',
-  '<section class="intro"><div class="intro-content"><p class="eyebrow"><span class="eyebrow-line"></span>YOUR BROWSER. YOUR RENDER ENGINE.</p><h1>TURN CODE<br>INTO <span>MOTION.</span></h1><p class="intro-copy">Transform your JavaScript animations into crisp, smooth video. Drop your animation files, choose your settings, and render in GitHub Cloud or on your device.</p><div class="feature-tags"><span>MP4 &amp; MOV</span><span>UP TO 4K</span><span>60 FPS</span></div></div><div class="prism-art" aria-hidden="true"><div class="prism-orbit orbit-one"></div><div class="prism-orbit orbit-two"></div><svg viewBox="0 0 300 270" fill="none"><defs><linearGradient id="prism-gradient" x1="30" y1="20" x2="260" y2="230" gradientUnits="userSpaceOnUse"><stop stop-color="#00ffff"/><stop offset="0.5" stop-color="#00a8ff"/><stop offset="1" stop-color="#9945ff"/></linearGradient></defs><path d="M150 22 259 85 259 211 150 251 41 211 41 85 150 22Z" fill="url(#prism-gradient)" fill-opacity=".05" stroke="url(#prism-gradient)"/><path d="m150 22 55 94-55 135-55-135 55-94Zm-109 63 109 34 109-34M41 211l109-92 109 92M95 116l55 3 55-3" stroke="url(#prism-gradient)" stroke-width="1.5"/><path d="M150 72 184 131 150 184 116 131 150 72Z" fill="url(#prism-gradient)" fill-opacity=".2" stroke="url(#prism-gradient)"/></svg><span class="prism-caption">CREATE / RENDER / EXPORT</span></div></section>',
+  '<header class="topbar"><a class="brand" href="#top" aria-label="Prysm Motion Studio home"><span class="brand-mark" aria-hidden="true">' + BRAND_MARK_HTML + '</span><span class="brand-name"><strong>PRYSM</strong><span>MOTION STUDIO</span></span></a><nav class="nav-links" aria-label="Studio navigation"><a href="#workspace">Studio</a><a href="#export-settings">Export</a><a href="#render-status">Status</a></nav><span class="local-badge"><i></i>Runs on your device</span></header>',
+  '<section class="intro"><div class="intro-content"><p class="eyebrow"><span class="eyebrow-line"></span>YOUR BROWSER. YOUR RENDER ENGINE.</p><h1>TURN CODE<br>INTO <span>MOTION.</span></h1><p class="intro-copy">Transform your JavaScript animations into crisp, smooth video. Drop your animation files, choose your settings, and render in GitHub Cloud or on your device.</p><div class="feature-tags"><span>MP4 &amp; MOV</span><span>UP TO 4K</span><span>60 FPS</span></div></div>' + PRISM_ART_HTML + '</section>',
   '<div class="workspace" id="workspace">',
   '<section class="preview-panel"><div class="panel-heading"><div class="panel-title"><span class="section-number">01</span><h2>Animation preview</h2></div><span id="source-badge" class="muted">No file loaded</span></div>',
   PREVIEW_TABS_HTML,
   '<div id="preview-files-content" role="tabpanel" aria-labelledby="preview-files-tab">',
+  '<div id="files-viewport" class="preview-viewport" tabindex="-1" role="region" aria-label="Animation file preview">',
   '<div id="stage" class="stage"><canvas id="preview" width="960" height="540"></canvas><div id="empty-state" class="empty-state"><span class="canvas-symbol">' + fileIcon + '</span><h3>YOUR NEXT FRAME<br>STARTS HERE.</h3><p>Drop your JavaScript files here to preview and render.</p><span class="empty-tag">CANVAS 2D / JAVASCRIPT</span></div></div>',
-  '<div class="playback"><button id="play" class="icon-button" disabled aria-label="Play or pause preview">▶</button><input id="seek" aria-label="Preview time" type="range" min="0" max="20" step="0.01" value="0" disabled><span id="time" class="time">0.00 / 0.00 s</span></div>',
+  '<div class="playback"><button id="play" class="icon-button" disabled aria-label="Play or pause preview">▶</button><input id="seek" aria-label="Preview time" type="range" min="0" max="20" step="0.01" value="0" disabled><span id="time" class="time">0.00 / 0.00 s</span>' + fullscreenButton('files-fullscreen') + '</div>',
+  '</div>',
   '<div class="file-details"><span class="file-detail-icon" aria-hidden="true">JS</span><div><strong id="animation-title">Canvas 2D animation</strong><span id="metadata">Animation details will appear here.</span></div><span class="file-detail-label">SOURCE</span></div></div>',
   QUICK_PREVIEW_HTML,
   '</section>',
@@ -55,6 +60,8 @@ document.querySelector('#app').innerHTML = [
 ].join('\n');
 
 const $ = (id) => document.getElementById(id);
+const fileFullscreen = makePreviewFullscreen($('files-viewport'), $('files-fullscreen'));
+const prism = makePrismAnimation(document.querySelector('.prism-art'));
 const state = {
   source: '', fileName: '', meta: null, preview: null, exporting: null,
   playing: false, raf: 0, time: 0, origin: 0, originTime: 0,
@@ -133,6 +140,9 @@ function updateRepairDetails(report) {
 }
 
 function updateControls() {
+  const rendering = (state.busy && !isCloud() && !state.repairing) || cloudControls.activity === 'in_progress';
+  const queued = !state.repairing && ((state.busy && isCloud()) || cloudControls.running);
+  prism.setState(rendering ? 'rendering' : queued ? 'queued' : 'idle');
   const blocked = state.busy || state.loading || cloudControls.running || cloudControls.connecting;
   $('file').disabled = blocked;
   $('upload-zone').classList.toggle('disabled', blocked);
@@ -333,6 +343,7 @@ quickPreview = makeQuickPreview({
   makeBridge: () => makeBridge(undefined, true),
   readDefaults: readAnimationDefaults,
   onModeChange: active => {
+    if (active) void fileFullscreen.exit();
     pause(); $('source-badge').hidden = active;
     document.querySelector('.preview-panel').classList.toggle('quick-mode', active); updateControls();
     if (!active) refreshAnimationDefaults();

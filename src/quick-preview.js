@@ -1,11 +1,14 @@
 import { sourceForQuickRender } from './animation-reader.js';
+import { fullscreenButton, makePreviewFullscreen } from './preview-fullscreen.js';
 
 export const PREVIEW_TABS_HTML = '<div class="preview-tabs" role="tablist" aria-label="Preview source"><button id="preview-files-tab" type="button" role="tab" aria-selected="true" aria-controls="preview-files-content">Animation files</button><button id="quick-preview-tab" type="button" role="tab" aria-selected="false" aria-controls="quick-preview-content" tabindex="-1">Quick Preview <span>LIVE</span></button></div>';
 
 export const QUICK_PREVIEW_HTML = [
   '<section id="quick-preview-content" role="tabpanel" aria-labelledby="quick-preview-tab" hidden>',
+  '<div id="quick-viewport" class="preview-viewport" tabindex="-1" role="region" aria-label="Quick Preview animation">',
   '<div id="quick-stage" class="stage"><canvas id="quick-canvas" width="960" height="540" aria-label="Pasted JavaScript animation preview"></canvas><div id="quick-empty" class="empty-state"><span class="quick-code-symbol" aria-hidden="true">&lt;/&gt;</span><h3 id="quick-empty-title">PASTE CODE.<br>SEE IT MOVE.</h3><p id="quick-empty-note">Paste your complete Canvas JavaScript below. Motion starts automatically.</p></div></div>',
-  '<div class="playback quick-playback"><button id="quick-play" class="icon-button" type="button" disabled aria-label="Play preview">▶</button><input id="quick-seek" aria-label="Quick Preview time" type="range" min="0" max="20" step="0.01" value="0" disabled><span id="quick-time" class="time">0.00 / 0.00 s</span></div>',
+  '<div class="playback quick-playback"><button id="quick-play" class="icon-button" type="button" disabled aria-label="Play preview">▶</button><input id="quick-seek" aria-label="Quick Preview time" type="range" min="0" max="20" step="0.01" value="0" disabled><span id="quick-time" class="time">0.00 / 0.00 s</span>' + fullscreenButton('quick-fullscreen') + '</div>',
+  '</div>',
   '<div class="quick-meta"><span id="quick-metadata">Local Canvas preview · no video encoding</span><label><input id="quick-loop" type="checkbox" checked>Loop preview</label></div>',
   '<div class="quick-terminal"><div class="quick-terminal-heading"><span class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span><label for="quick-code">quick-preview.js</label><span id="quick-code-count">0 lines · 0 KB</span></div><textarea id="quick-code" aria-label="Canvas JavaScript code" aria-describedby="quick-editor-note quick-status" placeholder="// Paste your complete Canvas .js code here…" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off" maxlength="5000000"></textarea></div>',
   '<div class="quick-actions"><div><button id="quick-example" class="secondary-button" type="button">Load example</button><button id="quick-restart" class="secondary-button" type="button" disabled>Restart preview</button><button id="quick-clear" class="secondary-button" type="button" disabled>Clear</button></div><button id="quick-use" class="quick-use-button" type="button" disabled>Use for render <span aria-hidden="true">↗</span></button></div>',
@@ -49,6 +52,7 @@ module.exports = draw;
 export function makeQuickPreview({ makeBridge, onModeChange, onUse, readDefaults }) {
   const $ = id => document.getElementById(id);
   const editor = $('quick-code');
+  const fullscreen = makePreviewFullscreen($('quick-viewport'), $('quick-fullscreen'));
   const state = { active: false, bridge: null, revision: 0, timer: 0, raf: 0, meta: null,
     ready: false, playing: false, drawing: false, pendingTime: null, time: 0, origin: 0, originTime: 0,
     lastFrameAt: -Infinity, source: '', bytes: 0, editingBlocked: false, useBlocked: false };
@@ -208,6 +212,7 @@ export function makeQuickPreview({ makeBridge, onModeChange, onUse, readDefaults
   }
   function showFiles() {
     if (!state.active) return;
+    void fullscreen.exit();
     state.active = false;
     stop();
     $('quick-preview-content').hidden = true;

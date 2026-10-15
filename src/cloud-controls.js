@@ -21,7 +21,7 @@ export const CLOUD_PANEL_HTML = '<section id="cloud-panel" class="cloud-panel" a
 
 function tokenUrl(repository) {
   const owner = repository.split('/')[0];
-  const params = new URLSearchParams({ name: 'Canvas Video Studio', target_name: owner, expires_in: '90', contents: 'write', actions: 'write' });
+  const params = new URLSearchParams({ name: 'Prysm Motion Studio', target_name: owner, expires_in: '90', contents: 'write', actions: 'write' });
   return 'https://github.com/settings/personal-access-tokens/new?' + params;
 }
 const statusText = job => job.status === 'completed' ? (job.conclusion === 'success' ? 'Completed' : job.conclusion === 'cancelled' ? 'Cancelled' : 'Finished · check file results') :
@@ -172,6 +172,7 @@ export function makeCloudControls({ onChange, onRun, onReport, onConnect }) {
   render();
   return {
     get running() { return running(); },
+    get activity() { return running() ? current.status : null; },
     get connecting() { return connecting; },
     get accepted() { return Boolean(current?.accepted); },
     get canCancel() { return running() && Boolean(current.runId) && !current.cancelRequested; },
