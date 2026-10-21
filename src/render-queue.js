@@ -95,7 +95,8 @@ export function createRenderQueue(panel, onPreview, onRepair, onRestore) {
 
 export function outputFileName(sourceName, settings) {
   const stem = sourceName.replace(/\.js$/i, '').replace(/[^\w.-]+/g, '_').replace(/^\.+$/, '') || 'animation';
-  return stem + '_' + settings.width + 'x' + settings.height + '_' + settings.fps + 'fps.' + settings.format;
+  const size = settings.width && settings.height ? settings.width + 'x' + settings.height : 'original';
+  return stem + '_' + size + '_' + settings.fps + 'fps.' + settings.format;
 }
 
 export function uniqueOutputName(name, used) {

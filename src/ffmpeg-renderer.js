@@ -2,7 +2,7 @@ import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { Input, BufferSource, MP4, QTFF } from 'mediabunny';
 import coreScript from '@ffmpeg/core?url';
 import coreWasm from '@ffmpeg/core/wasm?url';
-import { getBitrateProfile, bitrateInProfile, bitrateHasNonRoundKbps, randomBitrate } from './bitrate-profiles.js';
+import { validateTargetBitrate, verifiedBitrate, nextBitrate, bitrateRangeText } from './bitrate-profiles.js';
 import { animationTime, validateDuration } from './duration-settings.js';
 import { animationDefaults } from './animation-reader.js';
 
@@ -39,12 +39,9 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
           !Number.isFinite(s.duration) || s.duration <= 0 || total < 1) {
         throw new Error('Invalid FFmpeg export settings.');
       }
-      const profile = getBitrateProfile(s.bitrateMode);
-      if (!bitrateInProfile(s.bitrate, profile.id) || s.width !== profile.width || s.height !== profile.height) {
-        throw new Error('The dimensions or target bitrate do not match the selected Auto Random mode.');
-      }
+      validateTargetBitrate(s.bitrate, s.bitrateMode);
       if (estimate > MAX_OUTPUT_BYTES || total > 30_000) {
-        throw new Error('FFmpeg export is limited to approximately 500 MB or 30,000 frames. Reduce the duration or select a lower-resolution bitrate mode.');
+        throw new Error('FFmpeg export is limited to approximately 500 MB or 30,000 frames. Reduce the duration or bitrate.');
       }
       canvasBridge = makeCanvasBridge();
       const meta = await canvasBridge.call('load', { source, fileName,
@@ -121,8 +118,8 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
           throw new Error('The video and frames exceed the memory limit. Reduce the duration or resolution.');
         }
         emit({ event: 'phase', phase: 'encoding', targetBitrate,
-          message: (attempt ? 'Adjusting the bitrate to fit ' : 'Encoding H.264 within ') +
-            profile.minMbps + '–' + profile.maxMbps + ' Mbps…' });
+          message: (attempt ? 'Retrying H.264 encoding: ' : 'Encoding H.264: ') +
+            bitrateRangeText(s.bitrateMode, targetBitrate) + '…' });
         stageStarted = performance.now();
         encoding = true;
         const rate = String(targetBitrate);
@@ -167,21 +164,21 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
           inspection = null;
         }
         const bitrateMatches = Number.isFinite(videoBitrate) && Math.abs(videoBitrate / targetBitrate - 1) <= 0.05;
-        if (bitrateMatches && bitrateInProfile(videoBitrate, profile.id) && bitrateHasNonRoundKbps(videoBitrate)) {
+        if (verifiedBitrate(videoBitrate, s.bitrateMode, targetBitrate)) {
           return {
             buffer: data.buffer, bytes: data.byteLength,
             mime: s.format === 'mov' ? 'video/quicktime' : 'video/mp4',
             frames, duration, elapsed: (performance.now() - started) / 1000,
             savedToDisk: false, engine: 'ffmpeg', videoBitrate, bitrateMatches: true, bitrateVerified: true,
-            targetBitrate, bitrateMode: profile.id, encodingAttempts: attempt + 1, canvasRepair,
+            targetBitrate, bitrateMode: s.bitrateMode, encodingAttempts: attempt + 1, canvasRepair,
           };
         }
         if (attempt === 2) {
-          throw new Error('Unable to produce a verified bitrate within ' + profile.minMbps + '–' +
-            profile.maxMbps + ' Mbps after 3 encoding attempts. No video was saved.');
+          throw new Error('Unable to verify ' + bitrateRangeText(s.bitrateMode, targetBitrate) +
+            ' after 3 encoding attempts. No video was saved.');
         }
         await ffmpeg.deleteFile(outputName);
-        targetBitrate = randomBitrate(profile.id, [targetBitrate], true);
+        targetBitrate = nextBitrate(s.bitrateMode, s.bitrate, [targetBitrate], true);
       }
     } catch (error) {
       if (cancelled) throw abortError();

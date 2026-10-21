@@ -5,6 +5,34 @@ export const BITRATE_PROFILES = Object.freeze({
   '720p': Object.freeze({ id: '720p', label: 'HD (720p)', width: 1280, height: 720, minMbps: 20, maxMbps: 38 }),
 });
 
+export const MIN_BITRATE = 1_000_000;
+export const MAX_BITRATE = 200_000_000;
+
+export function validateTargetBitrate(bitrate, mode) {
+  if (!Number.isInteger(bitrate) || bitrate < MIN_BITRATE || bitrate > MAX_BITRATE) {
+    throw new Error('Choose a target bitrate from 1 to 200 Mbps.');
+  }
+  if (mode !== 'manual' && (!bitrateInProfile(bitrate, mode) || !bitrateHasNonRoundKbps(bitrate))) {
+    throw new Error('The target bitrate must be within the selected Auto Random range.');
+  }
+  return bitrate;
+}
+
+export function verifiedBitrate(bitrate, mode, target) {
+  return Number.isFinite(bitrate) && Math.abs(bitrate / target - 1) <= 0.05 &&
+    (mode === 'manual' || (bitrateInProfile(bitrate, mode) && bitrateHasNonRoundKbps(bitrate)));
+}
+
+export function nextBitrate(mode, target, previous = [], central = false) {
+  return mode === 'manual' ? target : randomBitrate(mode, previous, central);
+}
+
+export function bitrateRangeText(mode, target) {
+  if (mode === 'manual') return (target / 1_000_000).toFixed(3) + ' Mbps (±5%)';
+  const profile = getBitrateProfile(mode);
+  return profile.minMbps + '–' + profile.maxMbps + ' Mbps';
+}
+
 export function getBitrateProfile(id) {
   if (!Object.hasOwn(BITRATE_PROFILES, id)) throw new Error('Choose a supported Auto Random bitrate mode.');
   return BITRATE_PROFILES[id];

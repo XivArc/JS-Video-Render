@@ -7,7 +7,8 @@ import { availableParallelism, cpus, totalmem } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { chromium } from 'playwright';
 import { validateCloudJob, MAX_CLOUD_JOB_BYTES } from '../src/cloud-job.js';
-import { getBitrateProfile, randomBitrate, bitrateInProfile, bitrateHasNonRoundKbps } from '../src/bitrate-profiles.js';
+import { nextBitrate, verifiedBitrate } from '../src/bitrate-profiles.js';
+import { exportDimensions } from '../src/render-settings.js';
 import { durationSettings } from '../src/duration-settings.js';
 import { animationDefaults } from '../src/animation-reader.js';
 import { outputFileName, uniqueOutputName } from '../src/render-queue.js';
@@ -145,7 +146,7 @@ function inspect(path, settings, target) {
     throw new Error('Video verification failed: codec, dimensions, FPS, frames, or duration do not match.');
   }
   const bitrate = Number(stream.bit_rate);
-  return { verified: bitrateInProfile(bitrate, settings.bitrateMode) && bitrateHasNonRoundKbps(bitrate) && Math.abs(bitrate / target - 1) <= .05,
+  return { verified: verifiedBitrate(bitrate, settings.bitrateMode, target),
     videoBitrate: bitrate, frames: total, duration: Number(stream.duration) };
 }
 
@@ -157,14 +158,13 @@ async function renderFile(file, job, index, used) {
   try {
     if (cancelled) throw new Error('Cloud render cancelled.');
     log('File ' + (index + 1) + '/' + job.files.length + ': ' + file.fileName);
-    const profile = getBitrateProfile(job.settings.bitrateMode);
     const loadPayload = { source: file.source, name: file.fileName,
-      metadataDefaults: animationDefaults({ ...job.settings, width: profile.width, height: profile.height }) };
+      metadataDefaults: animationDefaults(job.settings) };
     const loadSource = () => page.evaluate(({ source, name, metadataDefaults }) =>
       window.loadAnimation(source, name, metadataDefaults), loadPayload);
     const meta = await loadSource();
     record.sourceMetadata = meta;
-    const settings = { ...job.settings, width: profile.width, height: profile.height,
+    const settings = { ...job.settings, ...exportDimensions(job.settings, meta),
       ...durationSettings(meta.duration, job.settings.durationChoice, job.settings.fps) };
     if (settings.duration * settings.fps < 1 || settings.duration * settings.fps > 30000) throw new Error('Cloud export supports 1–30,000 frames per video.');
     let target = file.bitrate;
@@ -195,7 +195,7 @@ async function renderFile(file, job, index, used) {
         log('Completed · ' + outputName + ' · verified ' + (verified.videoBitrate / 1e6).toFixed(3) + ' Mbps · ' + record.pipelineFPS.toFixed(2) + ' pipeline FPS');
         return;
       }
-      target = randomBitrate(settings.bitrateMode, [target], true);
+      target = nextBitrate(settings.bitrateMode, file.bitrate, [target], true);
     }
     throw new Error('Bitrate did not pass verification after 3 attempts.');
   } catch (error) {

@@ -3,7 +3,7 @@
 This optional engine runs on the standard Ubuntu CPU runner in GitHub Actions.
 It uses Playwright Chromium to draw Canvas frames, streams lossless PNG buffers to
 native FFmpeg/libx264, then verifies H.264, dimensions, frame rate, frame count,
-duration, and the selected Auto Random bitrate range with ffprobe. It does not
+duration, and the selected bitrate setting with ffprobe. It does not
 use a dedicated GPU or FFmpeg.wasm.
 
 For the existing XivArc/JS-Video-Render website, follow
@@ -34,21 +34,26 @@ For diagnostics, Actions can still run the provided `cloud/jobs/example-job.json
 manually. The website flow handles ordinary jobs without manual JSON uploads.
 
 The job format has `version: 1`, an identifier, `settings` (format, FPS, duration
-choice, and bitrate mode), and `files` (filename, full JavaScript source, and
-random target bitrate). It supports the same Canvas animation API as the
+choice, bitrate mode, and independent resolution), and `files` (filename, full
+JavaScript source, and target bitrate). It supports the same Canvas animation API as the
 browser: `meta` plus `drawFrame(canvas, seconds)` or
 `render(ctx, seconds, width, height)`, using a default export, CommonJS, or
 `globalThis.SmartHomeAnimations[id]`.
 It also accepts a directly exported `draw(ctx, seconds, width, height)` function
 with `draw.meta` through the same export mechanisms. The function adapter does
 not rewrite source or timing; resolved metadata and limits are still checked.
-The chosen Auto Random profile controls dimensions and verified bitrate,
-including for sources that attach their own `draw.exportSettings`.
+Output dimensions are independent of bitrate, including for sources with their
+own `draw.exportSettings`. Manual uses the entered target; Auto Random chooses
+within the selected range. Original resolution is resolved for each file.
+Legacy jobs without dimensions retain their original profile-derived size.
 
 Metadata is optional for complete draw/render/drawFrame functions. Missing
-width/height use the selected Auto Random profile; missing FPS uses the chosen
-frame rate; missing duration uses the selected duration or 20 seconds for Full
-animation. Explicit source metadata and recognized leading header labels take
+width/height use the chosen output size (or 1920x1080 in original-size mode);
+missing FPS uses the chosen frame rate; missing duration always uses 20 seconds.
+Full animation preserves detected source seconds at original speed, rounded to
+the nearest output frame. Duration constants, explicit units, and total frame
+count with declared source FPS are also recognized.
+Explicit source metadata and recognized leading header labels take
 precedence. Invalid declared values and conflicting headers still fail that
 file and allow the next source to run. Source JS is never rewritten. Metadata
 defaults are passed separately to the worker and reused for bitrate retries.

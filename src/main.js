@@ -4,7 +4,8 @@ import { fullscreenButton, makePreviewFullscreen } from './preview-fullscreen.js
 import { makePreviewResolution } from './preview-resolution.js';
 import { BRAND_MARK_HTML, PRISM_ART_HTML, makePrismAnimation } from './prism-art.js';
 import { makeFfmpegBridge } from './ffmpeg-renderer.js';
-import { BITRATE_PROFILES, getBitrateProfile, profileForDimensions, randomBitrate, bitrateInProfile, bitrateHasNonRoundKbps } from './bitrate-profiles.js';
+import { BITRATE_PROFILES, getBitrateProfile, randomBitrate, validateTargetBitrate, verifiedBitrate, nextBitrate, bitrateRangeText } from './bitrate-profiles.js';
+import { validateDimensions, exportDimensions } from './render-settings.js';
 import { MAX_QUEUE_FILES, createRenderQueue, outputFileName, uniqueOutputName } from './render-queue.js';
 import { MAX_AI_SOURCE_BYTES, repairEndpoint, callRepairBackend, applyRepairEdits, validateAnimation } from './ai-repair.js';
 import { FIXED_DURATIONS, durationSettings, animationTime } from './duration-settings.js';
@@ -18,7 +19,8 @@ document.documentElement.lang = 'en';
 const uploadIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M5 14v5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5"/></svg>';
 const fileIcon = '<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M19 3H8a2 2 0 0 0-2 2v22a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V10L19 3Zm0 0v7h7M12 16l-3 3 3 3m8-6 3 3-3 3m-3-7-2 10"/></svg>';
 const bitrateOptions = Object.values(BITRATE_PROFILES).map((profile) =>
-  '<option value="' + profile.id + '"' + (profile.id === '1080p' ? ' selected' : '') + '>Auto Random · ' + profile.label + ' · ' + profile.minMbps + '–' + profile.maxMbps + ' Mbps</option>').join('');
+  '<option value="' + profile.id + '"' + (profile.id === '1080p' ? ' selected' : '') + '>Auto Random · ' + profile.minMbps + '–' + profile.maxMbps + ' Mbps</option>').join('') +
+  '<option value="manual">Manual · enter Mbps</option>';
 const durationOptions = FIXED_DURATIONS.map(seconds =>
   '<option value="' + seconds + '">' + seconds + ' seconds</option>').join('');
 
@@ -41,7 +43,8 @@ document.querySelector('#app').innerHTML = [
   '<label class="upload-zone" id="upload-zone"><span class="upload-icon">' + uploadIcon + '</span><strong id="file-label">Drop JavaScript files here</strong><span>or click to browse · Up to 10 .js files · 5 MB each</span><input id="file" type="file" accept=".js,text/javascript,application/javascript" multiple aria-label="Choose up to 10 JavaScript animation files"></label>',
   '<p id="canvas-repair-note" class="field-note">Canvas auto-repair is on. Coordinate arrays and point objects are unpacked automatically.</p>',
   '<form id="settings"><label>Render location<select id="render-location"><option value="cloud" selected>GitHub Cloud · Actions</option><option value="browser">This device · browser</option></select></label><label>Render engine<select id="engine"><option value="ffmpeg">FFmpeg · verified bitrate</option><option value="webcodecs" disabled>WebCodecs · bitrate not guaranteed</option></select></label><p id="engine-note" class="field-note"></p><div class="field-row"><label>Format<select id="format"><option value="mp4">MP4 · H.264</option><option value="mov">MOV · H.264</option></select></label><label>Frame rate<select id="fps"><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="24">24 FPS</option><option value="25">25 FPS</option><option value="50">50 FPS</option></select></label></div>',
-  '<label>Resolution<select id="resolution"><option value="3840x2160">4K · 3840 × 2160</option><option value="2560x1440">2K · 2560 × 1440</option><option value="1920x1080" selected>FHD · 1920 × 1080</option><option value="1280x720">HD · 1280 × 720</option><option value="native" disabled>Original resolution</option></select></label>',
+  '<label>Resolution<select id="resolution"><option value="3840x2160">4K · 3840 × 2160</option><option value="2560x1440">2K · 2560 × 1440</option><option value="1920x1080" selected>FHD · 1920 × 1080</option><option value="1280x720">HD · 1280 × 720</option><option value="native">Original resolution · per file</option><option value="custom">Custom resolution</option></select></label>',
+  '<div id="custom-resolution" class="field-row" hidden><label>Width<input id="custom-width" type="number" min="16" max="4096" step="2" value="1920" aria-label="Custom width in pixels"></label><label>Height<input id="custom-height" type="number" min="16" max="4096" step="2" value="1080" aria-label="Custom height in pixels"></label></div><p class="field-note">Resolution and bitrate are independent.</p>',
   '<label>Duration<select id="duration" aria-describedby="duration-note"><option value="full">Full animation · original duration</option>' + durationOptions + '<option value="2">Quick test · 2 seconds</option><option value="5">Quick test · 5 seconds</option></select></label><p id="duration-note" class="field-note">Full animation uses each file’s original duration.</p>',
   '<label>Bitrate mode<select id="bitrate-mode">' + bitrateOptions + '</select></label>',
   '<label>Target bitrate<div class="bitrate-field"><input id="bitrate" type="number" min="40" max="51" step="0.001" value="45.123" required readonly aria-label="Target bitrate in Mbps"><span>Mbps</span><button id="random-bitrate" type="button" title="Pick a new target within the selected range">Randomize</button></div></label>',
@@ -165,31 +168,34 @@ function updateControls() {
 }
 
 function exportPreferences() {
-  const dimensions = $('resolution').value === 'native' ?
-    [state.meta?.width, state.meta?.height] : $('resolution').value.split('x').map(Number);
   const preferences = {
-    format: $('format').value, width: dimensions[0], height: dimensions[1], fps: Number($('fps').value),
+    format: $('format').value, ...resolutionPreferences(), fps: Number($('fps').value),
     durationChoice: $('duration').value, engine: $('engine').value, bitrateMode: $('bitrate-mode').value,
     bitrate: Math.round(Number($('bitrate').value) * 1_000_000), saveMode: $('save-mode').value,
   };
-  const profile = getBitrateProfile(preferences.bitrateMode);
-  if (!bitrateInProfile(preferences.bitrate, profile.id) || preferences.width !== profile.width || preferences.height !== profile.height) {
-    throw new Error('The resolution and target must match the selected Auto Random mode.');
-  }
-  if (preferences.engine !== 'ffmpeg') throw new Error('Auto Random modes require FFmpeg for verified bitrate.');
+  if (preferences.resolution !== 'native') validateDimensions(preferences.width, preferences.height);
+  validateTargetBitrate(preferences.bitrate, preferences.bitrateMode);
+  if (preferences.engine !== 'ffmpeg') throw new Error('Use FFmpeg for verified bitrate.');
   return preferences;
+}
+
+function resolutionPreferences() {
+  if ($('resolution').value === 'native') return { resolution: 'native' };
+  const dimensions = $('resolution').value === 'custom' ?
+    [Number($('custom-width').value), Number($('custom-height').value)] : $('resolution').value.split('x').map(Number);
+  return { resolution: 'fixed', width: dimensions[0], height: dimensions[1] };
 }
 
 function readAnimationDefaults(preferences) {
   if (preferences) return animationDefaults(preferences);
-  const profile = getBitrateProfile($('bitrate-mode').value);
-  return animationDefaults({ width: profile.width, height: profile.height,
+  const dimensions = resolutionPreferences();
+  return animationDefaults({ width: dimensions.width || undefined, height: dimensions.height || undefined,
     fps: Number($('fps').value), durationChoice: $('duration').value });
 }
 
 function settingsFor(meta, preferences, bitrate = preferences.bitrate) {
   return {
-    format: preferences.format, width: preferences.width, height: preferences.height, fps: preferences.fps,
+    format: preferences.format, ...exportDimensions(preferences, meta), fps: preferences.fps,
     engine: preferences.engine, bitrateMode: preferences.bitrateMode, bitrate,
     ...durationSettings(meta.duration, preferences.durationChoice, preferences.fps),
   };
@@ -217,30 +223,33 @@ function updateEstimate() {
 }
 
 function randomizeBitrate() {
+  if ($('bitrate-mode').value === 'manual') return Number($('bitrate').value) * 1_000_000;
   const bitrate = randomBitrate($('bitrate-mode').value, [Number($('bitrate').value) * 1_000_000, state.lastRenderBitrate]);
   $('bitrate').value = (bitrate / 1_000_000).toFixed(3);
   updateEstimate();
   return bitrate;
 }
 
-function updateBitrateMode(syncResolution = true) {
-  const profile = getBitrateProfile($('bitrate-mode').value);
-  if (syncResolution) $('resolution').value = profile.width + 'x' + profile.height;
+function updateBitrateMode() {
+  const manual = $('bitrate-mode').value === 'manual';
+  const profile = manual ? null : getBitrateProfile($('bitrate-mode').value);
   $('engine').value = 'ffmpeg';
-  $('bitrate').readOnly = true;
-  $('bitrate').min = profile.minMbps;
-  $('bitrate').max = profile.maxMbps;
-  $('bitrate-mode-note').textContent = 'New random target for each file. ' + profile.label + ': ' + profile.minMbps + '–' + profile.maxMbps + ' Mbps. Resolution follows this mode; every output is checked before saving.';
-  randomizeBitrate();
+  $('bitrate').readOnly = !manual;
+  $('bitrate').min = manual ? 1 : profile.minMbps;
+  $('bitrate').max = manual ? 200 : profile.maxMbps;
+  $('random-bitrate').hidden = manual;
+  $('bitrate-mode-note').textContent = manual ?
+    'Enter 1–200 Mbps. Every file uses this target; measured video bitrate is checked within ±5%.' :
+    'New random target for each file within ' + profile.minMbps + '–' + profile.maxMbps + ' Mbps. Works with any selected resolution.';
+  if (!manual) randomizeBitrate();
   updateEngineNotes();
 }
 
 function updateResolutionMode() {
-  const dimensions = $('resolution').value === 'native' ? [state.meta.width, state.meta.height] : $('resolution').value.split('x').map(Number);
-  const profile = profileForDimensions(...dimensions);
-  if (!profile) throw new Error('Choose a resolution supported by the Auto Random modes.');
-  $('bitrate-mode').value = profile.id;
-  updateBitrateMode(false);
+  const custom = $('resolution').value === 'custom';
+  $('custom-resolution').hidden = !custom;
+  for (const id of ['custom-width', 'custom-height']) $(id).required = custom;
+  updateEstimate();
 }
 
 function clearDownload() {
@@ -553,12 +562,6 @@ async function loadPreview(job, initial = false) {
       String(state.meta.fps) : '30';
     $('seek').max = previewTiming().duration;
     updateDurationNote();
-    const nativeProfile = profileForDimensions(state.meta.width, state.meta.height);
-    $('resolution').querySelector('[value="native"]').disabled = state.jobs.length > 1 || !nativeProfile;
-    if (initial) {
-      if ($('resolution').value === 'native' && nativeProfile && state.jobs.length === 1) updateResolutionMode();
-      else updateBitrateMode();
-    }
     $('stage').style.aspectRatio = state.meta.width + ' / ' + state.meta.height;
     $('status').textContent = state.jobs.length > 1 ? state.jobs.length + ' files ready to render' : 'Animation ready to export';
     setMessage(state.jobs.length > 1 ? 'One set of export settings applies to every file. Choose a fixed duration to fit each full animation to the same length. Choose Render ' + state.jobs.length + ' videos to start the queue.' : 'Preview resolution adapts to your display, up to 4K, and follows your selected duration. Your video uses the export settings. For a quick test, choose FFmpeg, 720p, 30 FPS, and 2 seconds.');
@@ -573,7 +576,6 @@ async function loadPreview(job, initial = false) {
     if (state.preview) state.preview.dispose();
     state.preview = null;
     state.meta = null;
-    if ($('resolution').value === 'native') updateBitrateMode();
     $('animation-title').textContent = job.file.name;
     $('metadata').textContent = 'Preview unavailable.';
     $('status').textContent = 'Unable to load the file';
@@ -601,8 +603,6 @@ async function selectFiles(files) {
   state.cloudQueueJobId = null;
   state.jobs = queue.replace(files);
   $('file-label').textContent = files.length === 1 ? files[0].name : files.length + ' JavaScript files selected';
-  if (files.length > 1 && $('resolution').value === 'native') updateBitrateMode();
-  $('resolution').querySelector('[value="native"]').disabled = true;
   updateEngineNotes();
   $('frame-stat').textContent = '0 frames';
   $('speed-stat').textContent = '—';
@@ -657,7 +657,7 @@ function updateEngineNotes() {
   $('save-mode').querySelector('[value="download"]').textContent = cloud ? 'GitHub Artifacts · 3 days' : batch ? 'Download each completed video' : 'Download when complete';
   $('engine').querySelector('[value="ffmpeg"]').textContent = cloud ? 'FFmpeg native · verified bitrate' : 'FFmpeg · verified bitrate';
   $('engine-note').textContent = cloud ? 'Click Render to upload your animations and start GitHub Actions automatically. Cloud status and completed videos appear below.' : isFfmpeg ?
-    'The video bitrate is verified against your selected range before saving.' :
+    'The video bitrate is verified against your chosen bitrate setting before saving.' :
     'Faster encoding. The actual bitrate may be much lower than your target.';
   $('bitrate-note').textContent = isFfmpeg ?
     'H.264 filler maintains the target bitrate when needed. It increases file size without adding visual detail.' :
@@ -686,7 +686,7 @@ function refreshAnimationDefaults() {
     void loadPreview(state.previewJob);
   }
 }
-for (const id of ['resolution', 'fps', 'duration', 'bitrate-mode']) {
+for (const id of ['resolution', 'custom-width', 'custom-height', 'fps', 'duration']) {
   $(id).addEventListener('change', () => { quickPreview.settingsChanged(); refreshAnimationDefaults(); });
 }
 $('random-bitrate').addEventListener('click', randomizeBitrate);
@@ -797,9 +797,9 @@ function onProgress(data, job) {
 }
 
 function encodingDetails(s, target = s.bitrate) {
-  const profile = getBitrateProfile(s.bitrateMode);
-  return 'FFmpeg / x264 · ' + profile.label + ' · allowed ' + profile.minMbps + '–' + profile.maxMbps +
-    ' Mbps · target ' + (target / 1_000_000).toFixed(3) + ' Mbps · ' + s.width + ' × ' + s.height + ' · ' + s.fps + ' FPS';
+  const dimensions = s.resolution === 'native' ? 'original size per file' : s.width + ' × ' + s.height;
+  return 'FFmpeg / x264 · ' + bitrateRangeText(s.bitrateMode, target) +
+    ' · target ' + (target / 1_000_000).toFixed(3) + ' Mbps · ' + dimensions + ' · ' + s.fps + ' FPS';
 }
 
 function checkCancelled() {
@@ -870,7 +870,7 @@ async function renderJob(job, preferences, bitrate, directory, diskNames) {
     state.lastRenderBitrate = bitrate;
     $('encoding-details').textContent = encodingDetails(s);
     if (s.bitrate * s.duration / 8 > 500_000_000) {
-      throw new Error('The estimated FFmpeg output exceeds 500 MB. Reduce the duration or select a lower-resolution bitrate mode.');
+      throw new Error('The estimated FFmpeg output exceeds 500 MB. Reduce the duration or bitrate.');
     }
     checkCancelled();
     const exporter = makeFfmpegBridge(() => makeBridge(undefined, job.repaired), data => {
@@ -883,8 +883,8 @@ async function renderJob(job, preferences, bitrate, directory, diskNames) {
     const result = await exporter.call('export', { source, fileName: job.file.name, settings: s,
       metadataDefaults: job.meta });
     checkCancelled();
-    if (result.engine !== 'ffmpeg' || !result.bitrateVerified || !bitrateInProfile(result.videoBitrate, s.bitrateMode) || !bitrateHasNonRoundKbps(result.videoBitrate)) {
-      throw new Error('The video bitrate did not pass the selected Auto Random range. No output file was saved.');
+    if (result.engine !== 'ffmpeg' || !result.bitrateVerified || !verifiedBitrate(result.videoBitrate, s.bitrateMode, result.targetBitrate)) {
+      throw new Error('The video bitrate did not pass the selected bitrate setting. No output file was saved.');
     }
     $('bitrate').value = (result.targetBitrate / 1_000_000).toFixed(3);
     state.lastRenderBitrate = result.targetBitrate;
@@ -907,11 +907,10 @@ async function renderJob(job, preferences, bitrate, directory, diskNames) {
       job.downloadUrl = URL.createObjectURL(new Blob([result.buffer], { type: result.mime }));
     }
     updateRepairDetails(result.canvasRepair);
-    const profile = getBitrateProfile(s.bitrateMode);
     const bitrateText = 'video bitrate ≈ ' + (result.videoBitrate / 1_000_000).toFixed(3) + ' Mbps';
     job.status = 'completed';
     job.detail = sizeText(result.bytes) + ' · ' + result.duration + ' s · ' + result.frames + ' frames · ' + bitrateText +
-      ' · verified ' + profile.minMbps + '–' + profile.maxMbps + ' Mbps · target ' + (result.targetBitrate / 1_000_000).toFixed(3) + ' Mbps' +
+      ' · verified ' + bitrateRangeText(s.bitrateMode, result.targetBitrate) + ' · target ' + (result.targetBitrate / 1_000_000).toFixed(3) + ' Mbps' +
       (result.savedToDisk ? ' · Saved as ' + job.outputName : '');
     // Keep output statistics and a Blob URL, without retaining a second copy of the video buffer.
     job.result = { bytes: result.bytes, duration: result.duration, frames: result.frames,
@@ -922,8 +921,8 @@ async function renderJob(job, preferences, bitrate, directory, diskNames) {
     $('frame-stat').textContent = result.frames + ' frames · ' + result.duration + ' seconds';
     $('speed-stat').textContent = 'Completed in ' + durationText(result.elapsed);
     $('eta-stat').textContent = sizeText(result.bytes);
-    setMessage(job.outputName + ' · ' + bitrateText + '. Verified within ' + profile.minMbps + '–' + profile.maxMbps +
-      ' Mbps. ' + (result.savedToDisk ? 'Saved to your chosen location.' : 'Download your video below.'));
+    setMessage(job.outputName + ' · ' + bitrateText + '. Verified: ' + bitrateRangeText(s.bitrateMode, result.targetBitrate) +
+      '. ' + (result.savedToDisk ? 'Saved to your chosen location.' : 'Download your video below.'));
     if (state.jobs.length === 1 && job.downloadUrl) {
       $('download').href = job.downloadUrl;
       $('download').download = job.outputName;
@@ -995,7 +994,7 @@ $('settings').addEventListener('submit', async (event) => {
     for (const job of state.jobs) {
       checkCancelled();
       const bitrate = job.index === 0 ? preferences.bitrate :
-        randomBitrate(preferences.bitrateMode, [...usedBitrates, state.lastRenderBitrate]);
+        nextBitrate(preferences.bitrateMode, preferences.bitrate, [...usedBitrates, state.lastRenderBitrate]);
       usedBitrates.add(bitrate);
       await renderJob(job, preferences, bitrate, directory, diskNames);
       checkCancelled();

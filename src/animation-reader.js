@@ -1,3 +1,5 @@
+import { parseSourceDuration } from './duration-settings.js';
+
 // Appended inside the animation module to see const/let bindings as well as
 // globals. The source's drawing code and line numbers stay unchanged.
 function captureBindings() {
@@ -11,26 +13,38 @@ function captureBindings() {
     META: typeof META !== 'undefined' ? META : undefined,
     config: typeof config !== 'undefined' ? config : undefined,
     CONFIG: typeof CONFIG !== 'undefined' ? CONFIG : undefined,
+    settings: typeof settings !== 'undefined' ? settings : undefined,
+    SETTINGS: typeof SETTINGS !== 'undefined' ? SETTINGS : undefined,
+    timing: typeof timing !== 'undefined' ? timing : undefined,
+    TIMING: typeof TIMING !== 'undefined' ? TIMING : undefined,
     exportSettings: typeof exportSettings !== 'undefined' ? exportSettings : undefined,
     EXPORT_SETTINGS: typeof EXPORT_SETTINGS !== 'undefined' ? EXPORT_SETTINGS : undefined,
     width: typeof width !== 'undefined' ? width : typeof WIDTH !== 'undefined' ? WIDTH : typeof W !== 'undefined' ? W : undefined,
     height: typeof height !== 'undefined' ? height : typeof HEIGHT !== 'undefined' ? HEIGHT : typeof H !== 'undefined' ? H : undefined,
-    fps: typeof fps !== 'undefined' ? fps : typeof FPS !== 'undefined' ? FPS : undefined,
-    duration: typeof duration !== 'undefined' ? duration : typeof DURATION !== 'undefined' ? DURATION : typeof DURATION_SECONDS !== 'undefined' ? DURATION_SECONDS : undefined,
+    fps: typeof fps !== 'undefined' ? fps : typeof FPS !== 'undefined' ? FPS : typeof FRAME_RATE !== 'undefined' ? FRAME_RATE : typeof frameRate !== 'undefined' ? frameRate : undefined,
+    duration: typeof duration !== 'undefined' ? duration : typeof DURATION !== 'undefined' ? DURATION :
+      typeof DURATION_SECONDS !== 'undefined' ? DURATION_SECONDS : typeof DURATION_SEC !== 'undefined' ? DURATION_SEC :
+      typeof durationSeconds !== 'undefined' ? durationSeconds : typeof durationSec !== 'undefined' ? durationSec :
+      typeof TOTAL_DURATION !== 'undefined' ? TOTAL_DURATION : typeof ANIMATION_DURATION !== 'undefined' ? ANIMATION_DURATION :
+      typeof totalDuration !== 'undefined' ? totalDuration : typeof animationDuration !== 'undefined' ? animationDuration :
+      typeof LOOP_DURATION !== 'undefined' ? LOOP_DURATION : undefined,
+    durationMs: typeof DURATION_MS !== 'undefined' ? DURATION_MS : typeof durationMs !== 'undefined' ? durationMs :
+      typeof DURATION_MILLISECONDS !== 'undefined' ? DURATION_MILLISECONDS : undefined,
+    totalFrames: typeof TOTAL_FRAMES !== 'undefined' ? TOTAL_FRAMES : typeof FRAME_COUNT !== 'undefined' ? FRAME_COUNT :
+      typeof totalFrames !== 'undefined' ? totalFrames : typeof frameCount !== 'undefined' ? frameCount : undefined,
   };
 }
 
 const isObject = value => value !== null && (typeof value === 'object' || typeof value === 'function');
 const fields = ['width', 'height', 'fps', 'duration'];
 
-// Export settings fill only missing source metadata. A source without duration
-// uses the selected duration, or 20 seconds when Full animation is selected.
+// Output duration never becomes source duration. Missing source timing is
+// always 20 seconds, including when a short test/fitted output is selected.
 export function animationDefaults(settings = {}) {
   return {
     width: settings.width ?? 1920, height: settings.height ?? 1080,
     fps: settings.fps ?? 30,
-    duration: settings.durationChoice === 'full' ? 20 :
-      settings.durationChoice !== undefined ? Number(settings.durationChoice) : settings.duration ?? 20,
+    duration: 20,
   };
 }
 
@@ -68,9 +82,19 @@ export function sourceHeaderMetadata(source) {
         line.match(/^(?:fps|frame\s*rate)\s*:\s*(-?\d+(?:\.\d+)?)(?:\s|$)/i);
       if (match) add('fps', match[1]);
     }
-    if (target || /^duration\s*:/i.test(line)) {
-      const match = line.match(/(?:^|[^\w.+-])(-?\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s)\b/i);
-      if (match) add('duration', match[1]);
+    const durationLabel = line.match(/^(?:(?:total|animation|loop|clip)\s+)?(?:duration|durasi)(?:\s*\((ms|milliseconds?|s|seconds?)\))?\s*[:=]\s*(.+)$/i);
+    if (durationLabel) {
+      const value = durationLabel[2].split(/[|;·(@,]/)[0].trim();
+      let seconds = parseSourceDuration(value, /^m/i.test(durationLabel[1] || ''));
+      if (!Number.isFinite(seconds)) {
+        const prefix = value.match(/^-?\d+(?:\.\d+)?\s*(?:milliseconds?|msecs?|ms|minutes?|mins?|m|seconds?|secs?|s|detik|menit)\b/i);
+        if (prefix) seconds = parseSourceDuration(prefix[0]);
+      }
+      if (Number.isFinite(seconds)) add('duration', seconds);
+      else if (/^-\d/.test(value)) add('duration', NaN);
+    } else if (target) {
+      const match = line.match(/(?:^|[^\w.+-])(-?\d+(?:\.\d+)?)\s*(milliseconds?|msecs?|ms|seconds?|secs?|s|detik)\b/i);
+      if (match) add('duration', parseSourceDuration(match[1] + match[2]));
     }
   }
   return values;
@@ -104,20 +128,35 @@ function resolveAnimation(imported, common, captured, metadataDefaults, header) 
     imported.meta, imported.metadata, common.exports?.meta, common.exports?.metadata,
     captured.meta, captured.metadata, captured.META,
     owner.exportSettings, fn.exportSettings, owner.config, imported.config,
-    captured.exportSettings, captured.EXPORT_SETTINGS, captured.config, captured.CONFIG, owner, fn, captured].filter(isObject);
-  const m = {}, defaulted = [], recovered = [];
+    captured.exportSettings, captured.EXPORT_SETTINGS, captured.config, captured.CONFIG,
+    captured.settings, captured.SETTINGS, captured.timing, captured.TIMING, owner, fn, captured]
+    .filter(isObject).flatMap(item => [item, item.timing].filter(isObject));
+  const m = {}, defaulted = [], recovered = [], inferred = [];
   for (const key of ['id', 'title', 'targetVideoBitrate', ...fields]) {
-    const aliases = key === 'fps' ? ['fps', 'frameRate'] : key === 'duration' ? ['duration', 'durationSeconds'] : [key];
+    const aliases = key === 'fps' ? ['fps', 'frameRate'] : key === 'duration' ?
+      ['duration', 'durationSeconds', 'durationSec', 'durationInSeconds', 'totalDuration', 'animationDuration', 'loopDuration',
+        'durationMs', 'durationMilliseconds', 'totalDurationMs'] : [key];
     let found = false;
     for (const item of sources) {
       for (const name of aliases) {
-        if (item[name] !== undefined) { m[key] = item[name]; found = true; break; }
+        if (item[name] !== undefined) {
+          m[key] = key === 'duration' ? parseSourceDuration(item[name], /Ms$|Milliseconds$/.test(name)) : item[name];
+          found = true; break;
+        }
       }
       if (found) break;
     }
     if (!found && fields.includes(key) && header[key].length) {
       if (header[key].length > 1) throw new Error('Conflicting source header metadata for ' + key + '. Provide one export target or explicit animation metadata.');
       m[key] = header[key][0]; found = true; recovered.push(key);
+    }
+    if (!found && key === 'duration' && !defaulted.includes('fps')) {
+      for (const item of sources) {
+        const frames = item.totalFrames ?? item.frameCount ?? item.durationFrames;
+        if (Number.isInteger(frames) && frames > 0) {
+          m.duration = frames / m.fps; found = true; inferred.push('duration'); break;
+        }
+      }
     }
     if (!found && fields.includes(key) && metadataDefaults?.[key] !== undefined) {
       m[key] = metadataDefaults[key]; defaulted.push(key);
@@ -134,7 +173,7 @@ function resolveAnimation(imported, common, captured, metadataDefaults, header) 
   const animation = { meta: m };
   if (api === 'drawFrame') animation.drawFrame = (canvas, seconds) => fn.call(owner, canvas, seconds);
   else animation.render = (ctx, seconds, width, height) => fn.call(owner, ctx, seconds, width, height);
-  return { animation, reader: { api, defaulted, header: recovered } };
+  return { animation, reader: { api, defaulted, header: recovered, inferred } };
 }
 
 export async function readAnimation(source, repair, fileName, metadataDefaults) {
