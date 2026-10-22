@@ -42,7 +42,7 @@ document.querySelector('#app').innerHTML = [
   '<aside class="settings-panel" id="export-settings"><div class="panel-heading"><div class="panel-title"><span class="section-number">02</span><h2>Export settings</h2></div><span class="step-chip">H.264</span></div>',
   '<label class="upload-zone" id="upload-zone"><span class="upload-icon">' + uploadIcon + '</span><strong id="file-label">Drop JavaScript files here</strong><span>or click to browse · Up to 10 .js files · 5 MB each</span><input id="file" type="file" accept=".js,text/javascript,application/javascript" multiple aria-label="Choose up to 10 JavaScript animation files"></label>',
   '<p id="canvas-repair-note" class="field-note">Canvas auto-repair is on. Coordinate arrays and point objects are unpacked automatically.</p>',
-  '<form id="settings"><label>Render location<select id="render-location"><option value="cloud" selected>GitHub Cloud · Actions</option><option value="browser">This device · browser</option></select></label><label>Render engine<select id="engine"><option value="ffmpeg">FFmpeg · verified bitrate</option><option value="webcodecs" disabled>WebCodecs · bitrate not guaranteed</option></select></label><p id="engine-note" class="field-note"></p><div class="field-row"><label>Format<select id="format"><option value="mp4">MP4 · H.264</option><option value="mov">MOV · H.264</option></select></label><label>Frame rate<select id="fps"><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="24">24 FPS</option><option value="25">25 FPS</option><option value="50">50 FPS</option></select></label></div>',
+  '<form id="settings"><label>Render location<select id="render-location"><option value="cloud" selected>GitHub Cloud · Actions</option><option value="browser">This device · browser</option></select></label><label>Render engine<select id="engine"><option value="ffmpeg">FFmpeg · verified bitrate</option></select></label><p id="engine-note" class="field-note"></p><div class="field-row"><label>Format<select id="format"><option value="mp4">MP4 · H.264</option><option value="mov">MOV · H.264</option></select></label><label>Frame rate<select id="fps"><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="24">24 FPS</option><option value="25">25 FPS</option><option value="50">50 FPS</option></select></label></div>',
   '<label>Resolution<select id="resolution"><option value="3840x2160">4K · 3840 × 2160</option><option value="2560x1440">2K · 2560 × 1440</option><option value="1920x1080" selected>FHD · 1920 × 1080</option><option value="1280x720">HD · 1280 × 720</option><option value="native">Original resolution · per file</option><option value="custom">Custom resolution</option></select></label>',
   '<div id="custom-resolution" class="field-row" hidden><label>Width<input id="custom-width" type="number" min="16" max="4096" step="2" value="1920" aria-label="Custom width in pixels"></label><label>Height<input id="custom-height" type="number" min="16" max="4096" step="2" value="1080" aria-label="Custom height in pixels"></label></div><p class="field-note">Resolution and bitrate are independent.</p>',
   '<label>Duration<select id="duration" aria-describedby="duration-note"><option value="full">Full animation · original duration</option>' + durationOptions + '<option value="2">Quick test · 2 seconds</option><option value="5">Quick test · 5 seconds</option></select></label><p id="duration-note" class="field-note">Full animation uses each file’s original duration.</p>',
@@ -354,7 +354,6 @@ const diskAvailable = 'showSaveFilePicker' in globalThis;
 const directoryAvailable = 'showDirectoryPicker' in globalThis;
 $('save-mode').querySelector('[value="disk"]').disabled = !diskAvailable;
 $('save-mode').value = 'download';
-$('engine').querySelector('[value="webcodecs"]').disabled = true;
 $('capabilities').textContent = browserReady ?
   'Browser ready. FFmpeg runs on this device’s CPU.' :
   'Export requires OffscreenCanvas, Worker, WebAssembly, and HTTPS or localhost.';
@@ -647,7 +646,6 @@ $('play').addEventListener('click', () => {
 $('seek').addEventListener('input', () => { pause(); void draw(Number($('seek').value)); });
 function updateEngineNotes() {
   const cloud = isCloud();
-  const isFfmpeg = $('engine').value === 'ffmpeg';
   const batch = state.jobs.length > 1;
   const diskOption = $('save-mode').querySelector('[value="disk"]');
   diskOption.textContent = batch ? 'Save all videos to a folder' : 'Choose a save location';
@@ -656,12 +654,9 @@ function updateEngineNotes() {
   if (diskOption.disabled && $('save-mode').value === 'disk') $('save-mode').value = 'download';
   $('save-mode').querySelector('[value="download"]').textContent = cloud ? 'GitHub Artifacts · 3 days' : batch ? 'Download each completed video' : 'Download when complete';
   $('engine').querySelector('[value="ffmpeg"]').textContent = cloud ? 'FFmpeg native · verified bitrate' : 'FFmpeg · verified bitrate';
-  $('engine-note').textContent = cloud ? 'Click Render to upload your animations and start GitHub Actions automatically. Cloud status and completed videos appear below.' : isFfmpeg ?
-    'The video bitrate is verified against your chosen bitrate setting before saving.' :
-    'Faster encoding. The actual bitrate may be much lower than your target.';
-  $('bitrate-note').textContent = isFfmpeg ?
-    'H.264 filler maintains the target bitrate when needed. It increases file size without adding visual detail.' :
-    'Your target is sent to the browser encoder. The result depends on the encoder and animation.';
+  $('engine-note').textContent = cloud ? 'Click Render to upload your animations and start GitHub Actions automatically. Cloud status and completed videos appear below.' :
+    'The video bitrate is verified against your chosen bitrate setting before saving.';
+  $('bitrate-note').textContent = 'H.264 filler maintains the target bitrate when needed. It increases file size without adding visual detail.';
   $('storage-note').textContent = cloud ? 'Results stay in GitHub Artifacts for 3 days. Download them after completion. Cloud disk limits: 2 GB per video and 8 GB per job, subject to available runner disk space.' : batch ?
     'Download each result from its row, or choose one folder when supported. Encoding uses memory; each output is limited to approximately 500 MB.' :
     'Encoding uses memory even when choosing a save location. Output is limited to approximately 500 MB.';
