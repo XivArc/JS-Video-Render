@@ -1,9 +1,10 @@
 import { installCanvasAutoRepair } from '../src/canvas-auto-repair.js';
 import { animationTime } from '../src/duration-settings.js';
 import { readAnimation } from '../src/animation-reader.js';
+import { encodePng } from './png-frame.js';
 
 const repair = installCanvasAutoRepair();
-let animation, meta, canvas;
+let animation, meta, canvas, fileName;
 
 function restrictIO(source) {
   if (/\bimport\b\s*(?:\(|['"{*]|[A-Za-z_$])|\bexport\s+(?:\*|\{[^}]*\})\s*from\s*['"]|\b(?:eval|Function|importScripts)\s*\(/.test(source)) {
@@ -33,13 +34,17 @@ async function load(source, fileName, metadataDefaults) {
 }
 
 self.onmessage = async ({ data: { id, type, payload } }) => {
+  let stage = type === 'load' ? 'load' : 'validation';
   try {
     if (type === 'load') {
+      fileName = payload.fileName;
       self.postMessage({ id, ok: true, result: await load(payload.source, payload.fileName, payload.metadataDefaults) });
     } else if (type === 'frame') {
       const { width, height, fps, frame, duration, durationMode } = payload;
       if (![width, height, fps, frame].every(Number.isInteger) || width < 16 || height < 16 || width > 4096 || height > 4096 ||
           ![24, 25, 30, 50, 60].includes(fps) || frame < 0 || frame >= Math.round(duration * fps)) throw new Error('Invalid cloud frame settings.');
+      stage = 'draw';
+      const drawStarted = performance.now();
       if (!canvas || canvas.width !== width || canvas.height !== height) canvas = new OffscreenCanvas(width, height);
       const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
       ctx.save(); ctx.resetTransform(); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, width, height); ctx.restore();
@@ -49,12 +54,23 @@ self.onmessage = async ({ data: { id, type, payload } }) => {
         else animation.render(ctx, time, width, height);
       } catch (error) { throw repair.annotate(error, time); }
       if (canvas.width !== width || canvas.height !== height) throw new Error('Animation changed the export canvas dimensions.');
-      // Send lossless compressed frames: raw 4K RGBA is 33 MB per frame and
-      // overwhelms the browser-to-encoder transfer before native encoding.
-      const buffer = await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer();
-      self.postMessage({ id, ok: true, result: { buffer, canvasRepair: repair.report() } }, [buffer]);
+      const drawMs = performance.now() - drawStarted;
+      stage = 'pixel-readback';
+      const readStarted = performance.now();
+      // Read pixels into typed arrays, then encode PNG without Blob/FileReader.
+      const pixels = ctx.getImageData(0, 0, width, height).data;
+      const readbackMs = performance.now() - readStarted;
+      stage = 'png-compression';
+      const compressionStarted = performance.now();
+      const buffer = encodePng(pixels, width, height);
+      self.postMessage({ id, ok: true, result: { buffer, drawMs,
+        readbackMs, compressionMs: performance.now() - compressionStarted, canvasRepair: repair.report() } }, [buffer]);
     } else throw new Error('Unknown cloud frame command.');
   } catch (error) {
-    self.postMessage({ id, ok: false, error: { name: error.name || 'Error', message: error.message || String(error) } });
+    const code = stage === 'pixel-readback' ? 'FRAME_READ_FAILED' : stage === 'png-compression' ? 'FRAME_ENCODE_FAILED' : stage === 'draw' ? 'ANIMATION_DRAW_FAILED' :
+      stage === 'load' && (error.name === 'NotReadableError' || error.cause?.name === 'NotReadableError') ? 'SOURCE_READ_FAILED' :
+      stage === 'load' ? 'ANIMATION_LOAD_FAILED' : 'FRAME_SETTINGS_INVALID';
+    self.postMessage({ id, ok: false, error: { code, stage, fileName, frame: payload.frame,
+      name: error.name || 'Error', message: error.message || String(error), stack: error.stack || '' } });
   }
 };

@@ -69,22 +69,35 @@ User source is evaluated only in a Chromium worker, never directly in Node.
 
 ## Rendering and results
 
-Files run sequentially with a fresh worker per source and a 30-second watchdog
-for loading/drawing. A late JavaScript error stops that source and removes its
+Files run sequentially with a fresh browser context and worker per source and a
+30-second watchdog for loading/drawing. Transient frame readback, compression,
+delivery, or worker failures restart only that file, up to two times, in a new
+context. Incomplete output is removed before retrying. Source/Canvas drawing
+errors remain visible; a late JavaScript error stops that source and removes its
 partial video; the next source still runs. Recognizable Canvas argument forms
 are normalized by the existing repair helper. AI repair is not part of this
 workflow.
 
-Binary PNG frame transfers use backpressure and keep one frame in flight. Frames
-are not stored as PNG files. Compressing each frame avoids transferring 33 MB
-of raw RGBA for every 4K frame. FFmpeg uses up to four CPU threads, the `veryfast`
+PNG frames are encoded from opaque RGB pixels using typed arrays, a PNG Sub
+filter, and the pinned fflate compressor. This bypasses
+`OffscreenCanvas.convertToBlob().arrayBuffer()` and Chromium's temporary PNG
+Blob backing storage. Pixel values are preserved exactly; there is no JPEG
+compression, downscaling, or reduction of the selected frame rate.
+
+Binary PNG transfers use backpressure and keep one frame in flight. The server
+validates the complete PNG, dimensions, size, and frame order before writing
+to FFmpeg. Interrupted uploads cannot append partial frames to the encoder.
+Frames are not stored as PNG files. Compressing each frame avoids transferring
+33 MB of raw RGBA for every 4K frame. FFmpeg uses up to four CPU threads, the `veryfast`
 x264 preset, and H.264 filler to maintain the requested bitrate. Filler increases
 file size without adding detail. Outputs are MP4/MOV without audio/transparency.
 Verification allows three bitrate attempts; retries redraw the animation.
 
 The engine estimates a 2 GB/video and 8 GB/job output budget, checks available
 disk space with a 500 MB reserve, and accepts up to 30,000 frames per video.
-The workflow timeout is 180 minutes including setup. Fixed durations of 10–60
+The workflow timeout is 360 minutes including setup, giving large batches room
+to complete after transient recoveries. This is a time budget, not a speed
+guarantee. Fixed durations of 10–60
 seconds fit the full animation; quick tests clip the start at original speed.
 Animations should use their provided time parameter, not a wall clock.
 
@@ -99,7 +112,12 @@ The Actions summary shows a green/red result for each file and measured bitrate.
 `pipelineFPS` measures frames divided by time spent drawing, streaming, and
 encoding for the successful attempt; setup, retries, and verification are
 outside this metric. `elapsedSeconds` for each file includes those attempts and
-verification. `canvasFPS` measures worker drawing/readback RPC time only.
+verification. `canvasFPS` measures worker drawing/readback/compression RPC time.
+The report separately records `pureDrawingSeconds`, `pixelReadbackSeconds`,
+`compressionSeconds`, and `frameTransferSeconds`. Recovery history includes
+the error and acknowledged frame count; failed frame errors identify the file,
+stage, and frame number. `encodingAttempts` includes all encode attempts and
+`recoveryAttempts` counts transient file restarts.
 Neither metric is the output video's chosen playback FPS. Real performance
 must be measured on the user's runner and representative animation.
 
@@ -121,6 +139,7 @@ For local native testing, install Node.js 24 and FFmpeg/ffprobe, then run:
 ```sh
 cd cloud
 npm ci
+npm test
 npx playwright install --with-deps chromium
 CLOUD_JOB_FILE=cloud/jobs/example-job.json npm run render
 ```
@@ -138,3 +157,4 @@ Official references:
 - https://ffmpeg.org/ffmpeg-formats.html#image2_002c-image2pipe
 - https://github.com/actions/upload-artifact
 - https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow
+- https://github.com/101arrowz/fflate

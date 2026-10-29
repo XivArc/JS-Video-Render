@@ -3,7 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
-  "scripts": { "render": "node render.mjs" },
-  "dependencies": { "playwright": "1.62.1" }
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "render": "node render.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "fflate": "0.8.2",
+    "playwright": "1.62.1"
+  }
 }

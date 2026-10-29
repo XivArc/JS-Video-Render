@@ -1,41 +1,67 @@
 <!doctype html><html lang="en"><meta charset="utf-8"><title>Cloud frame generator</title><script>
-let worker, nextId = 1, requests = new Map(), controller;
-const stop = () => {
+let worker, nextId = 1, requests = new Map(), controller, fileName;
+const failure = (code, message) => new Error('[' + code + '] ' + message);
+const stop = (error = failure('RENDER_STOPPED', 'Cloud frame generator stopped.')) => {
   worker?.terminate(); worker = null; controller?.abort();
-  for (const request of requests.values()) { clearTimeout(request.timer); request.reject(new Error('Cloud frame generator stopped.')); }
+  for (const request of requests.values()) { clearTimeout(request.timer); request.reject(error); }
   requests.clear();
 };
 const call = (type, payload) => new Promise((resolve, reject) => {
+  if (!worker) { reject(failure('WORKER_CRASH', 'The render worker is unavailable.')); return; }
   const id = nextId++;
-  const timer = setTimeout(() => stop(), 30000);
+  const timer = setTimeout(() => stop(failure('WORKER_TIMEOUT', fileName + ' · ' + type +
+    (Number.isInteger(payload.frame) ? ' · frame ' + (payload.frame + 1) : '') + ' exceeded 30 seconds.')), 30000);
   requests.set(id, { resolve, reject, timer });
-  worker.postMessage({ id, type, payload });
+  try { worker.postMessage({ id, type, payload }); }
+  catch (error) { stop(failure('WORKER_CRASH', error.message)); }
 });
-window.loadAnimation = async (source, fileName, metadataDefaults) => {
-  stop(); controller = new AbortController();
+window.loadAnimation = async (source, name, metadataDefaults) => {
+  stop(); controller = new AbortController(); fileName = name;
   worker = new Worker('/cloud/canvas-worker.js', { type: 'module' });
   worker.onmessage = ({ data }) => {
     const request = requests.get(data.id); if (!request) return;
     clearTimeout(request.timer); requests.delete(data.id);
     if (data.ok) request.resolve(data.result);
-    else request.reject(new Error(data.error.message));
+    else {
+      const detail = data.error;
+      const location = fileName + ' · ' + detail.stage +
+        (Number.isInteger(detail.frame) ? ' · frame ' + (detail.frame + 1) : '');
+      request.reject(failure(detail.code || 'WORKER_ERROR', location + ' · ' + detail.name + ': ' + detail.message +
+        (detail.stack ? '\nWorker stack: ' + detail.stack : '')));
+    }
   };
-  worker.onerror = () => stop();
+  worker.onerror = event => {
+    event.preventDefault();
+    stop(failure('WORKER_CRASH', fileName + ' · ' + (event.message || 'Render worker crashed.')));
+  };
+  worker.onmessageerror = () => stop(failure('WORKER_CRASH', fileName + ' · Unable to receive frame data.'));
   return call('load', { source, fileName, metadataDefaults });
 };
 window.streamFrames = async (settings, token) => {
-  const started = performance.now(); let drawingMs = 0, report;
+  const started = performance.now();
+  let drawingMs = 0, pureDrawingMs = 0, readbackMs = 0, compressionMs = 0, transferMs = 0, report;
   const total = Math.round(settings.duration * settings.fps);
   for (let frame = 0; frame < total; frame++) {
     const drawStarted = performance.now();
     const result = await call('frame', { ...settings, frame });
     drawingMs += performance.now() - drawStarted;
+    pureDrawingMs += result.drawMs; readbackMs += result.readbackMs;
+    compressionMs += result.compressionMs;
     report = result.canvasRepair;
-    const response = await fetch('/frame', { method: 'POST', headers: { 'X-Cloud-Token': token, 'X-Frame-Index': String(frame) },
-      body: result.buffer, signal: controller.signal });
-    if (!response.ok) throw new Error('Unable to stream frame ' + (frame + 1) + ': ' + await response.text());
+    const transferStarted = performance.now();
+    try {
+      const response = await fetch('/frame', { method: 'POST', headers: { 'Content-Type': 'image/png',
+        'X-Cloud-Token': token, 'X-Frame-Index': String(frame) }, body: result.buffer,
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]) });
+      if (!response.ok) throw new Error(await response.text());
+    } catch (error) {
+      throw failure('FRAME_TRANSFER_FAILED', fileName + ' · frame ' + (frame + 1) + '/' + total + ' · ' + error.message);
+    }
+    transferMs += performance.now() - transferStarted;
   }
-  return { frames: total, drawingSeconds: drawingMs / 1000, streamingSeconds: (performance.now() - started) / 1000, canvasRepair: report };
+  return { frames: total, drawingSeconds: drawingMs / 1000, pureDrawingSeconds: pureDrawingMs / 1000,
+    pixelReadbackSeconds: readbackMs / 1000, compressionSeconds: compressionMs / 1000, frameTransferSeconds: transferMs / 1000,
+    streamingSeconds: (performance.now() - started) / 1000, canvasRepair: report };
 };
-window.stopAnimation = stop;
+window.stopAnimation = () => stop();
 </script></html>
