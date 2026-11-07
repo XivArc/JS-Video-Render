@@ -9,7 +9,7 @@ import { chromium } from 'playwright';
 import { validateCloudJob, MAX_CLOUD_JOB_BYTES } from '../src/cloud-job.js';
 import { nextBitrate, verifiedBitrate } from '../src/bitrate-profiles.js';
 import { exportDimensions } from '../src/render-settings.js';
-import { durationSettings } from '../src/duration-settings.js';
+import { durationFramePlan, durationSettings } from '../src/duration-settings.js';
 import { animationDefaults } from '../src/animation-reader.js';
 import { outputFileName, uniqueOutputName } from '../src/render-queue.js';
 import { writePngFrame } from './frame-stream.mjs';
@@ -82,13 +82,15 @@ async function startServer() {
 }
 
 async function encode(source, fileName, settings, path, meta) {
-  const total = Math.round(settings.duration * settings.fps);
+  const { totalFrames: total, drawFrames, holdFrames } = durationFramePlan(meta.duration, settings, meta.endLoop);
   const started = performance.now();
   const rate = String(settings.bitrate);
   let tail = '';
   const child = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'warning', '-y', '-nostats', '-filter_threads', '2',
     '-f', 'image2pipe', '-vcodec', 'png',
-    '-framerate', String(settings.fps), '-i', 'pipe:0', '-frames:v', String(total), '-an',
+    '-framerate', String(settings.fps), '-i', 'pipe:0',
+    ...(holdFrames ? ['-vf', 'tpad=stop_mode=clone:stop=' + holdFrames] : []),
+    '-frames:v', String(total), '-an',
     '-c:v', 'libx264', '-threads', String(threads), '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
     '-b:v', rate, '-minrate', rate, '-maxrate', rate, '-bufsize', rate,
     '-x264-params', 'nal-hrd=vbr:filler=1:vbv-init=1:force-cfr=1', '-g', String(settings.fps * 2),
@@ -110,16 +112,17 @@ async function encode(source, fileName, settings, path, meta) {
   });
   finished.catch(() => {});
   const token = randomUUID();
-  active = { token, stdin: child.stdin, next: 0, total, width: settings.width, height: settings.height,
+  active = { token, stdin: child.stdin, next: 0, total: drawFrames, width: settings.width, height: settings.height,
     started, lastLog: 0, receiving: false };
   try {
-    const frames = await page.evaluate(({ settings, token }) => window.streamFrames(settings, token), { settings, token });
+    const frames = await page.evaluate(({ settings, token, drawFrames }) => window.streamFrames(settings, token, drawFrames),
+      { settings, token, drawFrames });
     child.stdin.end();
     await finished;
-    return { ...frames, elapsedSeconds: (performance.now() - started) / 1000 };
+    return { ...frames, holdFrames, elapsedSeconds: (performance.now() - started) / 1000 };
   } catch (error) {
     error.completedFrames = active?.next || 0;
-    error.totalFrames = total;
+    error.totalFrames = drawFrames;
     throw error;
   } finally {
     active = null; encoder = null;
@@ -189,7 +192,7 @@ async function renderFile(file, job, index, used) {
         const meta = await loadSource();
         record.sourceMetadata = meta;
         const settings = { ...job.settings, ...exportDimensions(job.settings, meta),
-          ...durationSettings(meta.duration, job.settings.durationChoice, job.settings.fps) };
+          ...durationSettings(meta.duration, job.settings.durationChoice, job.settings.fps, job.settings.extraSeconds) };
         if (settings.duration * settings.fps < 1 || settings.duration * settings.fps > 30000) throw new Error('Cloud export supports 1–30,000 frames per video.');
         let target = file.bitrate;
         if (!path) for (;;) {
@@ -218,7 +221,8 @@ async function renderFile(file, job, index, used) {
               pixelReadbackSeconds: metrics.pixelReadbackSeconds, compressionSeconds: metrics.compressionSeconds,
               frameTransferSeconds: metrics.frameTransferSeconds,
               elapsedSeconds: (performance.now() - started) / 1000, pipelineFPS: verified.frames / metrics.elapsedSeconds,
-              canvasFPS: metrics.drawingSeconds > 0 ? verified.frames / metrics.drawingSeconds : null, canvasRepair: metrics.canvasRepair });
+              canvasFPS: metrics.drawingSeconds > 0 ? metrics.frames / metrics.drawingSeconds : null, canvasRepair: metrics.canvasRepair,
+              durationMode: settings.durationMode, drawnFrames: metrics.frames, heldFrames: metrics.holdFrames });
             log('Completed · ' + outputName + ' · verified ' + (verified.videoBitrate / 1e6).toFixed(3) + ' Mbps · ' + record.pipelineFPS.toFixed(2) + ' pipeline FPS');
             return;
           }

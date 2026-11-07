@@ -29,6 +29,7 @@ async function load(source, fileName, metadataDefaults) {
     throw new Error('Source metadata exceeds supported limits.');
   }
   meta = { width: animation.meta.width, height: animation.meta.height, fps: animation.meta.fps, duration: animation.meta.duration,
+    endLoop: animation.meta.endLoop,
     title: String(animation.meta.title || animation.meta.id || fileName).slice(0, 200), reader: loaded.reader };
   return meta;
 }
@@ -40,7 +41,7 @@ self.onmessage = async ({ data: { id, type, payload } }) => {
       fileName = payload.fileName;
       self.postMessage({ id, ok: true, result: await load(payload.source, payload.fileName, payload.metadataDefaults) });
     } else if (type === 'frame') {
-      const { width, height, fps, frame, duration, durationMode } = payload;
+      const { width, height, fps, frame, duration } = payload;
       if (![width, height, fps, frame].every(Number.isInteger) || width < 16 || height < 16 || width > 4096 || height > 4096 ||
           ![24, 25, 30, 50, 60].includes(fps) || frame < 0 || frame >= Math.round(duration * fps)) throw new Error('Invalid cloud frame settings.');
       stage = 'draw';
@@ -48,7 +49,7 @@ self.onmessage = async ({ data: { id, type, payload } }) => {
       if (!canvas || canvas.width !== width || canvas.height !== height) canvas = new OffscreenCanvas(width, height);
       const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
       ctx.save(); ctx.resetTransform(); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, width, height); ctx.restore();
-      const time = animationTime(frame / fps, meta.duration, { duration, durationMode });
+      const time = animationTime(frame / fps, meta.duration, payload, meta.endLoop);
       try {
         if (typeof animation.drawFrame === 'function') animation.drawFrame(canvas, time);
         else animation.render(ctx, time, width, height);

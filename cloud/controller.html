@@ -37,10 +37,9 @@ window.loadAnimation = async (source, name, metadataDefaults) => {
   worker.onmessageerror = () => stop(failure('WORKER_CRASH', fileName + ' · Unable to receive frame data.'));
   return call('load', { source, fileName, metadataDefaults });
 };
-window.streamFrames = async (settings, token) => {
+window.streamFrames = async (settings, token, total) => {
   const started = performance.now();
   let drawingMs = 0, pureDrawingMs = 0, readbackMs = 0, compressionMs = 0, transferMs = 0, report;
-  const total = Math.round(settings.duration * settings.fps);
   for (let frame = 0; frame < total; frame++) {
     const drawStarted = performance.now();
     const result = await call('frame', { ...settings, frame });

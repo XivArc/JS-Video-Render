@@ -8,7 +8,7 @@ import { BITRATE_PROFILES, getBitrateProfile, randomBitrate, validateTargetBitra
 import { validateDimensions, exportDimensions } from './render-settings.js';
 import { MAX_QUEUE_FILES, createRenderQueue, outputFileName, uniqueOutputName } from './render-queue.js';
 import { MAX_AI_SOURCE_BYTES, repairEndpoint, callRepairBackend, applyRepairEdits, validateAnimation } from './ai-repair.js';
-import { FIXED_DURATIONS, durationSettings, animationTime } from './duration-settings.js';
+import { FIXED_DURATIONS, MAX_EXTRA_SECONDS, validExtraSeconds, durationSettings, animationTime } from './duration-settings.js';
 import { CLOUD_PANEL_HTML, makeCloudControls } from './cloud-controls.js';
 import { PREVIEW_TABS_HTML, QUICK_PREVIEW_HTML, makeQuickPreview } from './quick-preview.js';
 import { animationDefaults } from './animation-reader.js';
@@ -45,7 +45,10 @@ document.querySelector('#app').innerHTML = [
   '<form id="settings"><label>Render location<select id="render-location"><option value="cloud" selected>GitHub Cloud · Actions</option><option value="browser">This device · browser</option></select></label><label>Render engine<select id="engine"><option value="ffmpeg">FFmpeg · verified bitrate</option></select></label><p id="engine-note" class="field-note"></p><div class="field-row"><label>Format<select id="format"><option value="mp4">MP4 · H.264</option><option value="mov">MOV · H.264</option></select></label><label>Frame rate<select id="fps"><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="24">24 FPS</option><option value="25">25 FPS</option><option value="50">50 FPS</option></select></label></div>',
   '<label>Resolution<select id="resolution"><option value="3840x2160">4K · 3840 × 2160</option><option value="2560x1440">2K · 2560 × 1440</option><option value="1920x1080" selected>FHD · 1920 × 1080</option><option value="1280x720">HD · 1280 × 720</option><option value="native">Original resolution · per file</option><option value="custom">Custom resolution</option></select></label>',
   '<div id="custom-resolution" class="field-row" hidden><label>Width<input id="custom-width" type="number" min="16" max="4096" step="2" value="1920" aria-label="Custom width in pixels"></label><label>Height<input id="custom-height" type="number" min="16" max="4096" step="2" value="1080" aria-label="Custom height in pixels"></label></div><p class="field-note">Resolution and bitrate are independent.</p>',
-  '<label>Duration<select id="duration" aria-describedby="duration-note"><option value="full">Full animation · original duration</option>' + durationOptions + '<option value="2">Quick test · 2 seconds</option><option value="5">Quick test · 5 seconds</option></select></label><p id="duration-note" class="field-note">Full animation uses each file’s original duration.</p>',
+  '<label>Duration mode<select id="duration-mode" aria-describedby="duration-note"><option value="fit">Fit to Duration</option><option value="extend">Extend Timeline</option></select></label>',
+  '<label id="fit-duration">Target duration<select id="duration" aria-describedby="duration-note"><option value="full">Full animation · original duration</option>' + durationOptions + '<option value="2">Quick test · 2 seconds</option><option value="5">Quick test · 5 seconds</option></select></label>',
+  '<label id="extend-duration" hidden>Add time (seconds)<input id="extra-seconds" type="number" min="1" max="' + MAX_EXTRA_SECONDS + '" step="1" value="10" required disabled aria-describedby="duration-note"></label>',
+  '<p id="duration-note" class="field-note" aria-live="polite">Full animation uses each file’s original duration.</p>',
   '<label>Bitrate mode<select id="bitrate-mode">' + bitrateOptions + '</select></label>',
   '<label>Target bitrate<div class="bitrate-field"><input id="bitrate" type="number" min="40" max="51" step="0.001" value="45.123" required readonly aria-label="Target bitrate in Mbps"><span>Mbps</span><button id="random-bitrate" type="button" title="Pick a new target within the selected range">Randomize</button></div></label>',
   '<p id="bitrate-mode-note" class="field-note"></p>',
@@ -69,7 +72,7 @@ const prism = makePrismAnimation(document.querySelector('.prism-art'));
 const state = {
   source: '', fileName: '', meta: null, preview: null, exporting: null,
   playing: false, raf: 0, time: 0, origin: 0, originTime: 0,
-  drawing: false, pendingTime: null, loading: false, busy: false, cancelRequested: false, fileStream: null,
+  drawing: false, pendingTime: null, previewFrame: null, loading: false, busy: false, cancelRequested: false, fileStream: null,
   activeSettings: null, lastRenderBitrate: null, jobs: [], currentJob: null, preparing: null, repairing: null,
   cloudQueueJobId: null, previewJob: null,
 };
@@ -154,8 +157,14 @@ function updateControls() {
   $('file').disabled = blocked;
   $('upload-zone').classList.toggle('disabled', blocked);
   for (const element of $('settings').querySelectorAll('input, select, button')) element.disabled = blocked;
+  const extended = $('duration-mode').value === 'extend';
+  $('fit-duration').hidden = extended;
+  $('extend-duration').hidden = !extended;
+  $('duration').disabled = blocked || extended;
+  $('extra-seconds').disabled = blocked || !extended;
   $('save-mode').disabled = blocked || isCloud();
-  $('render').disabled = blocked || quickPreview?.active || !state.jobs.length || (!isCloud() && !browserReady);
+  $('render').disabled = blocked || quickPreview?.active || !state.jobs.length || (!isCloud() && !browserReady) ||
+    (extended && !validExtraSeconds($('extra-seconds').valueAsNumber));
   $('render').innerHTML = (state.jobs.length > 1 ? 'Render ' + state.jobs.length + ' videos' : 'Render video') + ' <span aria-hidden="true">↗</span>';
   $('play').disabled = blocked || !state.meta;
   $('seek').disabled = blocked || !state.meta;
@@ -167,10 +176,16 @@ function updateControls() {
   quickPreview?.setBlocked({ editing: state.busy || state.loading, using: blocked });
 }
 
+function durationPreferences() {
+  return $('duration-mode').value === 'extend' ?
+    { durationChoice: 'extend', extraSeconds: $('extra-seconds').valueAsNumber } :
+    { durationChoice: $('duration').value };
+}
+
 function exportPreferences() {
   const preferences = {
     format: $('format').value, ...resolutionPreferences(), fps: Number($('fps').value),
-    durationChoice: $('duration').value, engine: $('engine').value, bitrateMode: $('bitrate-mode').value,
+    ...durationPreferences(), engine: $('engine').value, bitrateMode: $('bitrate-mode').value,
     bitrate: Math.round(Number($('bitrate').value) * 1_000_000), saveMode: $('save-mode').value,
   };
   if (preferences.resolution !== 'native') validateDimensions(preferences.width, preferences.height);
@@ -190,14 +205,14 @@ function readAnimationDefaults(preferences) {
   if (preferences) return animationDefaults(preferences);
   const dimensions = resolutionPreferences();
   return animationDefaults({ width: dimensions.width || undefined, height: dimensions.height || undefined,
-    fps: Number($('fps').value), durationChoice: $('duration').value });
+    fps: Number($('fps').value) });
 }
 
 function settingsFor(meta, preferences, bitrate = preferences.bitrate) {
   return {
     format: preferences.format, ...exportDimensions(preferences, meta), fps: preferences.fps,
     engine: preferences.engine, bitrateMode: preferences.bitrateMode, bitrate,
-    ...durationSettings(meta.duration, preferences.durationChoice, preferences.fps),
+    ...durationSettings(meta.duration, preferences.durationChoice, preferences.fps, preferences.extraSeconds),
   };
 }
 
@@ -264,12 +279,29 @@ function pause() {
 }
 
 function previewTiming() {
-  return durationSettings(state.meta.duration, $('duration').value, Number($('fps').value));
+  const { durationChoice, extraSeconds } = durationPreferences();
+  const choice = durationChoice === 'extend' && !validExtraSeconds(extraSeconds) ? 'full' : durationChoice;
+  const fps = Number($('fps').value);
+  return { fps, ...durationSettings(state.meta.duration, choice, fps, extraSeconds) };
 }
 
 function updateDurationNote() {
-  const choice = $('duration').value;
-  if (choice === 'full') {
+  const { durationChoice: choice, extraSeconds } = durationPreferences();
+  if (choice === 'extend') {
+    if (!validExtraSeconds(extraSeconds)) {
+      $('duration-note').textContent = 'Enter 1–' + MAX_EXTRA_SECONDS + ' whole seconds to extend the timeline.';
+    } else if (state.meta) {
+      const { duration } = previewTiming();
+      const seconds = value => Number(value.toFixed(3)) + ' s';
+      $('duration-note').textContent = seconds(duration - extraSeconds) + ' + ' + seconds(extraSeconds) +
+        ' = ' + seconds(duration) + ' · ' + (state.meta.endLoop ? 'End loop' : 'Hold last frame') +
+        (state.meta.reader.defaulted.includes('duration') ? ' · Source defaults to 20 s' : '') +
+        (state.jobs.length > 1 ? ' · Time added to each file' : '');
+    } else {
+      $('duration-note').textContent = 'Adds ' + extraSeconds +
+        ' seconds to each file at its original speed. Repeats a declared end loop or holds the final frame.';
+    }
+  } else if (choice === 'full') {
     $('duration-note').textContent = state.meta?.reader?.defaulted?.includes('duration') ?
       'No source duration found. Full animation uses ' + state.meta.duration + ' seconds. Choose a duration to set the clip length.' :
       'Full animation uses each file’s original duration. Files without duration use 20 seconds.';
@@ -302,16 +334,22 @@ async function draw(time) {
   try {
     const timing = previewTiming();
     time = Math.max(0, Math.min(timing.duration, time));
-    const sourceTime = animationTime(time, state.meta.duration, timing);
-    const { bitmap, canvasRepair } = await bridge.call('draw', { width, height, time: sourceTime }, [], 10000);
-    if (bridge !== state.preview) { bitmap.close(); return; }
-    const canvas = $('preview');
-    try {
-      if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
-      canvas.getContext('2d').drawImage(bitmap, 0, 0);
-    } finally { bitmap.close(); }
-    $('canvas-repair-note').textContent = canvasRepair?.repairedCalls ? repairText(canvasRepair) :
-      'Canvas auto-repair is on. Coordinate arrays and point objects are unpacked automatically.';
+    const sourceTime = animationTime(time, state.meta.duration, timing, state.meta.endLoop);
+    const previous = state.previewFrame;
+    const reuse = timing.durationMode === 'extend' && !state.meta.endLoop && previous?.bridge === bridge &&
+      previous.width === width && previous.height === height && previous.sourceTime === sourceTime;
+    if (!reuse) {
+      const { bitmap, canvasRepair } = await bridge.call('draw', { width, height, time: sourceTime }, [], 10000);
+      if (bridge !== state.preview) { bitmap.close(); return; }
+      const canvas = $('preview');
+      try {
+        if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+        canvas.getContext('2d').drawImage(bitmap, 0, 0);
+      } finally { bitmap.close(); }
+      state.previewFrame = { bridge, width, height, sourceTime };
+      $('canvas-repair-note').textContent = canvasRepair?.repairedCalls ? repairText(canvasRepair) :
+        'Canvas auto-repair is on. Coordinate arrays and point objects are unpacked automatically.';
+    }
     state.time = time;
     $('seek').value = time;
     $('time').textContent = time.toFixed(2) + ' / ' + timing.duration.toFixed(2) + ' s';
@@ -535,6 +573,7 @@ async function loadPreview(job, initial = false) {
   if (state.preview) state.preview.dispose();
   state.preview = null;
   state.meta = null;
+  state.previewFrame = null;
   $('source-badge').textContent = 'Loading…';
   $('source-badge').classList.remove('loaded');
   state.drawing = false;
@@ -563,7 +602,7 @@ async function loadPreview(job, initial = false) {
     updateDurationNote();
     $('stage').style.aspectRatio = state.meta.width + ' / ' + state.meta.height;
     $('status').textContent = state.jobs.length > 1 ? state.jobs.length + ' files ready to render' : 'Animation ready to export';
-    setMessage(state.jobs.length > 1 ? 'One set of export settings applies to every file. Choose a fixed duration to fit each full animation to the same length. Choose Render ' + state.jobs.length + ' videos to start the queue.' : 'Preview resolution adapts to your display, up to 4K, and follows your selected duration. Your video uses the export settings. For a quick test, choose FFmpeg, 720p, 30 FPS, and 2 seconds.');
+    setMessage(state.jobs.length > 1 ? 'Fit to Duration sets the same target length for the queue. Extend Timeline adds time to each file’s own duration. Choose Render ' + state.jobs.length + ' videos to start the queue.' : 'Preview resolution adapts to your display, up to 4K, and follows your selected duration. For a quick test, choose Fit to Duration, 720p, 30 FPS, and 2 seconds.');
     updateEngineNotes();
     const drawn = await draw(Math.min(2, previewTiming().duration));
     if (!drawn && job.status === 'pending') {
@@ -672,6 +711,9 @@ $('settings').addEventListener('input', updateEstimate);
 $('engine').addEventListener('change', updateEngineNotes);
 $('bitrate-mode').addEventListener('change', () => updateBitrateMode());
 $('resolution').addEventListener('change', updateResolutionMode);
+for (const [id, event] of [['duration-mode', 'change'], ['extra-seconds', 'input']]) {
+  $(id).addEventListener(event, () => { updateControls(); updatePreviewTiming(); });
+}
 $('duration').addEventListener('change', updatePreviewTiming);
 $('fps').addEventListener('change', updatePreviewTiming);
 function refreshAnimationDefaults() {
@@ -681,7 +723,7 @@ function refreshAnimationDefaults() {
     void loadPreview(state.previewJob);
   }
 }
-for (const id of ['resolution', 'custom-width', 'custom-height', 'fps', 'duration']) {
+for (const id of ['resolution', 'custom-width', 'custom-height', 'fps']) {
   $(id).addEventListener('change', () => { quickPreview.settingsChanged(); refreshAnimationDefaults(); });
 }
 $('random-bitrate').addEventListener('click', randomizeBitrate);

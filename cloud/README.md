@@ -53,6 +53,16 @@ missing FPS uses the chosen frame rate; missing duration always uses 20 seconds.
 Full animation preserves detected source seconds at original speed, rounded to
 the nearest output frame. Duration constants, explicit units, and total frame
 count with declared source FPS are also recognized.
+To add time at the original speed, use `durationChoice: "extend"` and
+`extraSeconds: 10` in the job settings (1–60 whole seconds). Each file gets
+the added time after its own duration. A source may declare
+`meta.endLoop: { start: 22, end: 25 }` or a top-level
+`const END_LOOP = { start: 22, end: 25 }` for a seamless ending segment of a
+25-second animation. The end must match the source duration; if omitted it
+defaults to that duration. The renderer repeats only this segment at original
+speed. With no valid ending loop, FFmpeg clones the last frame without asking
+the browser to draw additional frames. Reports distinguish drawn and held
+frames. Older job files continue to use their original duration choices.
 Explicit source metadata and recognized leading header labels take
 precedence. Invalid declared values and conflicting headers still fail that
 file and allow the next source to run. Source JS is never rewritten. Metadata

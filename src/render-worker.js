@@ -26,6 +26,7 @@ async function loadAnimation(source, fileName, metadataDefaults) {
     id: String(m.id || 'canvas_animation').slice(0, 150),
     title: String(m.title || m.id || 'Canvas animation').slice(0, 200),
     width: m.width, height: m.height, fps: m.fps, duration: m.duration,
+    endLoop: m.endLoop,
     targetVideoBitrate: Number(m.targetVideoBitrate) || 12_000_000,
     reader: loaded.reader,
   };

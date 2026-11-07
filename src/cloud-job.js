@@ -1,5 +1,5 @@
 import { getBitrateProfile, validateTargetBitrate, nextBitrate } from './bitrate-profiles.js';
-import { FIXED_DURATIONS } from './duration-settings.js';
+import { FIXED_DURATIONS, MAX_EXTRA_SECONDS, validExtraSeconds } from './duration-settings.js';
 import { validateDimensions } from './render-settings.js';
 
 export const CLOUD_ACTIONS_URL = 'https://github.com/XivArc/JS-Video-Render/actions/workflows/render-cloud.yml';
@@ -13,8 +13,12 @@ export function validateCloudJob(job) {
   }
   const settings = job.settings;
   if (!settings || !['mp4', 'mov'].includes(settings.format) || ![24, 25, 30, 50, 60].includes(settings.fps) ||
-      !['full', '2', '5', ...FIXED_DURATIONS.map(String)].includes(settings.durationChoice)) {
+      !['full', '2', '5', 'extend', ...FIXED_DURATIONS.map(String)].includes(settings.durationChoice)) {
     throw new Error('Choose a supported format, frame rate, and duration.');
+  }
+  const extend = settings.durationChoice === 'extend';
+  if (extend && !validExtraSeconds(settings.extraSeconds)) {
+    throw new Error('Add 1–' + MAX_EXTRA_SECONDS + ' whole seconds to extend the timeline.');
   }
   if (settings.bitrateMode !== 'manual') getBitrateProfile(settings.bitrateMode);
   let dimensions;
@@ -38,6 +42,7 @@ export function validateCloudJob(job) {
   });
   const normalized = { version: 1, id: job.id, settings: {
     format: settings.format, fps: settings.fps, durationChoice: settings.durationChoice, bitrateMode: settings.bitrateMode, ...dimensions,
+    ...(extend ? { extraSeconds: settings.extraSeconds } : {}),
   }, files };
   if (bytes(JSON.stringify(normalized)) > MAX_CLOUD_JOB_BYTES) throw new Error('The cloud job exceeds 20 MB. Select fewer files for this job.');
   return normalized;

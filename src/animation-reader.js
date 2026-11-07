@@ -1,4 +1,4 @@
-import { parseSourceDuration } from './duration-settings.js';
+import { normalizeEndLoop, parseSourceDuration } from './duration-settings.js';
 
 // Appended inside the animation module to see const/let bindings as well as
 // globals. The source's drawing code and line numbers stay unchanged.
@@ -17,6 +17,7 @@ function captureBindings() {
     SETTINGS: typeof SETTINGS !== 'undefined' ? SETTINGS : undefined,
     timing: typeof timing !== 'undefined' ? timing : undefined,
     TIMING: typeof TIMING !== 'undefined' ? TIMING : undefined,
+    endLoop: typeof endLoop !== 'undefined' ? endLoop : typeof END_LOOP !== 'undefined' ? END_LOOP : undefined,
     exportSettings: typeof exportSettings !== 'undefined' ? exportSettings : undefined,
     EXPORT_SETTINGS: typeof EXPORT_SETTINGS !== 'undefined' ? EXPORT_SETTINGS : undefined,
     width: typeof width !== 'undefined' ? width : typeof WIDTH !== 'undefined' ? WIDTH : typeof W !== 'undefined' ? W : undefined,
@@ -170,6 +171,9 @@ function resolveAnimation(imported, common, captured, metadataDefaults, header) 
   if (m.width > 16384 || m.height > 16384 || m.duration > 3600 || m.fps > 240) {
     throw new Error('The animation metadata exceeds the supported limits.');
   }
+  const loopSource = sources.find(item => item.endLoop !== undefined);
+  const endLoop = normalizeEndLoop(loopSource?.endLoop, m.duration);
+  if (endLoop) m.endLoop = endLoop;
   const animation = { meta: m };
   if (api === 'drawFrame') animation.drawFrame = (canvas, seconds) => fn.call(owner, canvas, seconds);
   else animation.render = (ctx, seconds, width, height) => fn.call(owner, ctx, seconds, width, height);

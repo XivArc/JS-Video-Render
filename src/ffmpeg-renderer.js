@@ -3,7 +3,7 @@ import { Input, BufferSource, MP4, QTFF } from 'mediabunny';
 import coreScript from '@ffmpeg/core?url';
 import coreWasm from '@ffmpeg/core/wasm?url';
 import { validateTargetBitrate, verifiedBitrate, nextBitrate, bitrateRangeText } from './bitrate-profiles.js';
-import { animationTime, validateDuration } from './duration-settings.js';
+import { animationTime, durationFramePlan } from './duration-settings.js';
 import { animationDefaults } from './animation-reader.js';
 
 const MAX_OUTPUT_BYTES = 500_000_000;
@@ -46,7 +46,7 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
       canvasBridge = makeCanvasBridge();
       const meta = await canvasBridge.call('load', { source, fileName,
         metadataDefaults: metadataDefaults ?? animationDefaults(s) }, [], 15_000);
-      validateDuration(meta.duration, s);
+      const { drawFrames, holdFrames } = durationFramePlan(meta.duration, s, meta.endLoop);
       checkCancelled();
       emit({ event: 'phase', phase: 'loading', message: 'Loading the local video encoder…' });
       ffmpeg = new FFmpeg();
@@ -84,13 +84,13 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
       await ffmpeg.createDir('/frames');
       emit({ event: 'phase', phase: 'frames', message: 'Preparing frames from your animation…' });
       stageStarted = performance.now();
-      for (let i = 0; i < total; i++) {
+      for (let i = 0; i < drawFrames; i++) {
         checkCancelled();
         const result = await canvasBridge.call('png', {
-          width: s.width, height: s.height, time: animationTime(i / s.fps, meta.duration, s),
+          width: s.width, height: s.height, time: animationTime(i / s.fps, meta.duration, s, meta.endLoop),
         }, [], 60_000).catch(error => {
           if (error.name === 'AbortError') throw error;
-          const failure = new Error('Frame ' + (i + 1) + ' / ' + total + ' · ' + error.message, { cause: error });
+          const failure = new Error('Frame ' + (i + 1) + ' / ' + drawFrames + ' · ' + error.message, { cause: error });
           failure.name = error.name;
           throw failure;
         });
@@ -101,9 +101,9 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
           throw new Error('The frames and video require too much temporary memory. Reduce the resolution or duration and try again.');
         }
         await ffmpeg.writeFile('/frames/f' + String(i).padStart(6, '0') + '.png', new Uint8Array(result.buffer));
-        if (i % 4 === 0 || i === total - 1) {
-          emit({ event: 'progress', phase: 'frames', frame: i + 1, total, bytes: inputBytes,
-            elapsed: (performance.now() - stageStarted) / 1000, progress: 35 * (i + 1) / total, canvasRepair });
+        if (i % 4 === 0 || i === drawFrames - 1) {
+          emit({ event: 'progress', phase: 'frames', frame: i + 1, total: drawFrames, bytes: inputBytes,
+            elapsed: (performance.now() - stageStarted) / 1000, progress: 35 * (i + 1) / drawFrames, canvasRepair });
         }
       }
       canvasBridge.dispose();
@@ -126,7 +126,9 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
         // Filler is real H.264 stream data. VBR HRD is compatible with MP4.
         const code = await ffmpeg.exec([
           '-hide_banner', '-y', '-framerate', String(s.fps), '-start_number', '0',
-          '-i', '/frames/f%06d.png', '-frames:v', String(total), '-an',
+          '-i', '/frames/f%06d.png',
+          ...(holdFrames ? ['-vf', 'tpad=stop_mode=clone:stop=' + holdFrames] : []),
+          '-frames:v', String(total), '-an',
           '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
           '-b:v', rate, '-minrate', rate, '-maxrate', rate, '-bufsize', rate,
           '-x264-params', 'nal-hrd=vbr:filler=1:vbv-init=1:force-cfr=1',
