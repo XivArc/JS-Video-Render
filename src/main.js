@@ -8,7 +8,7 @@ import { BITRATE_PROFILES, getBitrateProfile, randomBitrate, validateTargetBitra
 import { validateDimensions, exportDimensions } from './render-settings.js';
 import { MAX_QUEUE_FILES, createRenderQueue, outputFileName, uniqueOutputName } from './render-queue.js';
 import { MAX_AI_SOURCE_BYTES, repairEndpoint, callRepairBackend, applyRepairEdits, validateAnimation } from './ai-repair.js';
-import { FIXED_DURATIONS, MAX_EXTRA_SECONDS, validExtraSeconds, durationSettings, animationTime } from './duration-settings.js';
+import { FIXED_DURATIONS, MAX_EXTRA_SECONDS, validExtraSeconds, durationSettings, animationFrame } from './duration-settings.js';
 import { CLOUD_PANEL_HTML, makeCloudControls } from './cloud-controls.js';
 import { PREVIEW_TABS_HTML, QUICK_PREVIEW_HTML, makeQuickPreview } from './quick-preview.js';
 import { animationDefaults } from './animation-reader.js';
@@ -293,8 +293,9 @@ function updateDurationNote() {
     } else if (state.meta) {
       const { duration } = previewTiming();
       const seconds = value => Number(value.toFixed(3)) + ' s';
+      const ending = state.meta.endLoop ? 'End loop' : state.meta.endRegion?.label ?? 'Hold last frame';
       $('duration-note').textContent = seconds(duration - extraSeconds) + ' + ' + seconds(extraSeconds) +
-        ' = ' + seconds(duration) + ' · ' + (state.meta.endLoop ? 'End loop' : 'Hold last frame') +
+        ' = ' + seconds(duration) + ' · ' + ending +
         (state.meta.reader.defaulted.includes('duration') ? ' · Source defaults to 20 s' : '') +
         (state.jobs.length > 1 ? ' · Time added to each file' : '');
     } else {
@@ -334,12 +335,13 @@ async function draw(time) {
   try {
     const timing = previewTiming();
     time = Math.max(0, Math.min(timing.duration, time));
-    const sourceTime = animationTime(time, state.meta.duration, timing, state.meta.endLoop);
+    const frame = animationFrame(time, state.meta, timing);
+    const sourceTime = frame.time;
     const previous = state.previewFrame;
-    const reuse = timing.durationMode === 'extend' && !state.meta.endLoop && previous?.bridge === bridge &&
+    const reuse = timing.durationMode === 'extend' && !(state.meta.endLoop ?? state.meta.endRegion) && previous?.bridge === bridge &&
       previous.width === width && previous.height === height && previous.sourceTime === sourceTime;
     if (!reuse) {
-      const { bitmap, canvasRepair } = await bridge.call('draw', { width, height, time: sourceTime }, [], 10000);
+      const { bitmap, canvasRepair } = await bridge.call('draw', { width, height, ...frame }, [], 10000);
       if (bridge !== state.preview) { bitmap.close(); return; }
       const canvas = $('preview');
       try {

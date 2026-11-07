@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { animationTime, durationFramePlan, durationSettings, normalizeEndLoop } from '../../src/duration-settings.js';
+import { animationFrame, animationTime, durationFramePlan, durationSettings, normalizeEndLoop } from '../../src/duration-settings.js';
 import { validateCloudJob } from '../../src/cloud-job.js';
+import { sourceHeaderMetadata } from '../../src/animation-reader.js';
 
 const timing = (source, choice, fps = 60, extra) => ({ fps, ...durationSettings(source, choice, fps, extra) });
 
@@ -28,6 +29,25 @@ test('a declared terminal loop continues at 1× and never seeks back into the in
   for (const [t, expected] of [[24.5, 24.5], [25, 22], [25.5, 22.5], [28, 22], [34, 22], [35, 22 + 59 / 60]]) {
     assert.ok(Math.abs(animationTime(t, 25, settings, loop) - expected) < 1e-9, 'Output second ' + t);
   }
+});
+
+test('a leading duration, resolution and FPS tuple establishes the source timing', () => {
+  const header = '/**\n * 25 seconds, 3840 × 2160, 60 fps. The renderer supplies seconds.\n */';
+  assert.deepEqual(sourceHeaderMetadata(header), { width: [3840], height: [2160], fps: [60], duration: [25] });
+  assert.deepEqual(sourceHeaderMetadata('function draw() {}\n' + header).duration, []);
+});
+
+test('the region keeps the source clock through the original clip and holds the last complete frame during its loop', () => {
+  const endRegion = { start: 18.75, end: 25 };
+  const meta = { duration: 25, endRegion };
+  const settings = timing(25, 'extend', 60, 10);
+  assert.deepEqual(animationFrame(1499 / 60, meta, settings), { time: 1499 / 60 });
+  for (const outputTime of [25, 31.25]) {
+    assert.deepEqual(animationFrame(outputTime, meta, settings), { time: 18.75, endingBaseTime: 1499 / 60 });
+  }
+  assert.deepEqual(animationFrame(26.5, meta, settings), { time: 20.25, endingBaseTime: 1499 / 60 });
+  assert.deepEqual(animationFrame(17.5, meta, timing(25, '35')), { time: 12.5 });
+  assert.deepEqual(durationFramePlan(25, settings, endRegion), { totalFrames: 2100, drawFrames: 2100, holdFrames: 0 });
 });
 
 test('fractional source durations keep the exact original frame count and loop phase', () => {

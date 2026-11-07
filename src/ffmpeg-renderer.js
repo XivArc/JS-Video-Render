@@ -3,7 +3,7 @@ import { Input, BufferSource, MP4, QTFF } from 'mediabunny';
 import coreScript from '@ffmpeg/core?url';
 import coreWasm from '@ffmpeg/core/wasm?url';
 import { validateTargetBitrate, verifiedBitrate, nextBitrate, bitrateRangeText } from './bitrate-profiles.js';
-import { animationTime, durationFramePlan } from './duration-settings.js';
+import { animationFrame, durationFramePlan } from './duration-settings.js';
 import { animationDefaults } from './animation-reader.js';
 
 const MAX_OUTPUT_BYTES = 500_000_000;
@@ -46,7 +46,7 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
       canvasBridge = makeCanvasBridge();
       const meta = await canvasBridge.call('load', { source, fileName,
         metadataDefaults: metadataDefaults ?? animationDefaults(s) }, [], 15_000);
-      const { drawFrames, holdFrames } = durationFramePlan(meta.duration, s, meta.endLoop);
+      const { drawFrames, holdFrames } = durationFramePlan(meta.duration, s, meta.endLoop ?? meta.endRegion);
       checkCancelled();
       emit({ event: 'phase', phase: 'loading', message: 'Loading the local video encoder…' });
       ffmpeg = new FFmpeg();
@@ -87,7 +87,7 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
       for (let i = 0; i < drawFrames; i++) {
         checkCancelled();
         const result = await canvasBridge.call('png', {
-          width: s.width, height: s.height, time: animationTime(i / s.fps, meta.duration, s, meta.endLoop),
+          width: s.width, height: s.height, ...animationFrame(i / s.fps, meta, s),
         }, [], 60_000).catch(error => {
           if (error.name === 'AbortError') throw error;
           const failure = new Error('Frame ' + (i + 1) + ' / ' + drawFrames + ' · ' + error.message, { cause: error });

@@ -1,9 +1,11 @@
 import { installCanvasAutoRepair } from '../src/canvas-auto-repair.js';
-import { animationTime } from '../src/duration-settings.js';
+import { animationFrame } from '../src/duration-settings.js';
 import { readAnimation } from '../src/animation-reader.js';
+import { createEndRegionPainter } from '../src/ending-region.js';
 import { encodePng } from './png-frame.js';
 
 const repair = installCanvasAutoRepair();
+const paintFrame = createEndRegionPainter(paint);
 let animation, meta, canvas, fileName;
 
 function restrictIO(source) {
@@ -22,6 +24,7 @@ async function load(source, fileName, metadataDefaults) {
   restrictIO(source);
   const loaded = await readAnimation(source, repair, fileName, metadataDefaults);
   animation = loaded.animation;
+  canvas = null;
   for (const key of ['width', 'height', 'fps', 'duration']) {
     if (!Number.isFinite(animation.meta[key]) || animation.meta[key] <= 0) throw new Error('Invalid source metadata: ' + key);
   }
@@ -29,9 +32,18 @@ async function load(source, fileName, metadataDefaults) {
     throw new Error('Source metadata exceeds supported limits.');
   }
   meta = { width: animation.meta.width, height: animation.meta.height, fps: animation.meta.fps, duration: animation.meta.duration,
-    endLoop: animation.meta.endLoop,
+    endLoop: animation.meta.endLoop, endRegion: animation.meta.endRegion,
     title: String(animation.meta.title || animation.meta.id || fileName).slice(0, 200), reader: loaded.reader };
   return meta;
+}
+
+function paint(target, time) {
+  const ctx = target.getContext('2d', { alpha: false, willReadFrequently: true });
+  ctx.save(); ctx.resetTransform(); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, target.width, target.height); ctx.restore();
+  try {
+    if (typeof animation.drawFrame === 'function') animation.drawFrame(target, time);
+    else animation.render(ctx, time, target.width, target.height);
+  } catch (error) { throw repair.annotate(error, time); }
 }
 
 self.onmessage = async ({ data: { id, type, payload } }) => {
@@ -48,12 +60,8 @@ self.onmessage = async ({ data: { id, type, payload } }) => {
       const drawStarted = performance.now();
       if (!canvas || canvas.width !== width || canvas.height !== height) canvas = new OffscreenCanvas(width, height);
       const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
-      ctx.save(); ctx.resetTransform(); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, width, height); ctx.restore();
-      const time = animationTime(frame / fps, meta.duration, payload, meta.endLoop);
-      try {
-        if (typeof animation.drawFrame === 'function') animation.drawFrame(canvas, time);
-        else animation.render(ctx, time, width, height);
-      } catch (error) { throw repair.annotate(error, time); }
+      const { time, endingBaseTime } = animationFrame(frame / fps, meta, payload);
+      paintFrame(canvas, time, meta.endRegion, endingBaseTime);
       if (canvas.width !== width || canvas.height !== height) throw new Error('Animation changed the export canvas dimensions.');
       const drawMs = performance.now() - drawStarted;
       stage = 'pixel-readback';

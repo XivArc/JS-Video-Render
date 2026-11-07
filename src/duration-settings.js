@@ -82,18 +82,22 @@ export function validateDuration(sourceDuration, settings) {
   }
 }
 
-export function durationFramePlan(sourceDuration, settings, endLoop) {
+export function durationFramePlan(sourceDuration, settings, endingMotion) {
   validateDuration(sourceDuration, settings);
   const totalFrames = frameCount(settings.duration, settings.fps);
-  const holdFrames = settings.durationMode === 'extend' && !endLoop ? settings.extraSeconds * settings.fps : 0;
+  const holdFrames = settings.durationMode === 'extend' && !endingMotion ? settings.extraSeconds * settings.fps : 0;
   return { totalFrames, drawFrames: totalFrames - holdFrames, holdFrames };
+}
+
+function extensionFrame(time, settings) {
+  return Math.min(frameCount(settings.duration, settings.fps) - 1, Math.floor(time * settings.fps + 1e-8));
 }
 
 export function animationTime(outputTime, sourceDuration, settings, endLoop) {
   const time = Math.max(0, Math.min(settings.duration, outputTime));
   if (settings.durationMode === 'extend') {
     const { fps } = settings;
-    const frame = Math.min(frameCount(settings.duration, fps) - 1, Math.floor(time * fps + 1e-8));
+    const frame = extensionFrame(time, settings);
     const originalFrames = frameCount(sourceDuration, fps);
     if (frame < originalFrames) return frame / fps;
     if (!endLoop) return (originalFrames - 1) / fps;
@@ -106,4 +110,14 @@ export function animationTime(outputTime, sourceDuration, settings, endLoop) {
   }
   return Math.min(sourceDuration, settings.durationMode === 'fit' ?
     time / settings.duration * sourceDuration : time);
+}
+
+export function animationFrame(outputTime, meta, settings) {
+  const { duration, endLoop, endRegion } = meta;
+  const time = animationTime(outputTime, duration, settings, endLoop ?? endRegion);
+  if (settings.durationMode !== 'extend' || endLoop || !endRegion) return { time };
+  const originalFrames = frameCount(duration, settings.fps);
+  const outputFrame = extensionFrame(Math.max(0, Math.min(settings.duration, outputTime)), settings);
+  return outputFrame < originalFrames ? { time } :
+    { time, endingBaseTime: (originalFrames - 1) / settings.fps };
 }

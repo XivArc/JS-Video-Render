@@ -1,4 +1,5 @@
 import { normalizeEndLoop, parseSourceDuration } from './duration-settings.js';
+import { knownEndRegion } from './ending-region.js';
 
 // Appended inside the animation module to see const/let bindings as well as
 // globals. The source's drawing code and line numbers stay unchanged.
@@ -49,7 +50,7 @@ export function animationDefaults(settings = {}) {
   };
 }
 
-// Only leading comments with explicit metadata labels are eligible. This
+// Only leading comments with a label or a duration, size and FPS tuple are eligible. This
 // excludes drawing coordinates, string literals, and comments inside helpers.
 export function sourceHeaderMetadata(source) {
   const text = source.slice(0, 16384), comments = [];
@@ -73,6 +74,11 @@ export function sourceHeaderMetadata(source) {
   };
   for (const raw of comments.join('\n').split(/\r?\n/)) {
     const line = raw.trim().replace(/^\*\s?/, '');
+    const tuple = line.match(/^(-?\d+(?:\.\d+)?)\s*(seconds?|secs?|s|detik)\s*,\s*(\d+)\s*[x×]\s*(\d+)\s*,\s*(\d+(?:\.\d+)?)\s*fps\s*(?:$|[.;]\s.*|[.;]$)/i);
+    if (tuple) {
+      add('duration', tuple[1]); add('width', tuple[3]); add('height', tuple[4]); add('fps', tuple[5]);
+      continue;
+    }
     const target = /^(?:(?:native\s+)?(?:video\s+)?export\s+target|(?:native\s+)?render\s+target|animation\s+metadata)\s*:/i.test(line);
     if (target || /^(?:resolution|dimensions|size)\s*:/i.test(line)) {
       const match = line.match(/(?:^|[^\w.+-])(-?\d+(?:\.\d+)?)\s*[x×]\s*(-?\d+(?:\.\d+)?)(?![\d.])/i);
@@ -195,11 +201,14 @@ export async function readAnimation(source, repair, fileName, metadataDefaults) 
   const url = URL.createObjectURL(new Blob([source, footer], { type: 'text/javascript' }));
   repair.reset(fileName, url);
   try {
+    const endRegion = await knownEndRegion(source);
     const imported = await import(/* @vite-ignore */ url);
     // Keep the source timing already accepted through Use for render, even if
     // the user subsequently changes output settings. No source file is edited.
     const defaults = { ...metadataDefaults, ...common.__canvasPreviewDefaults };
-    return resolveAnimation(imported, common, globalThis[key] || {}, defaults, sourceHeaderMetadata(source));
+    const loaded = resolveAnimation(imported, common, globalThis[key] || {}, defaults, sourceHeaderMetadata(source));
+    if (endRegion?.end === loaded.animation.meta.duration) loaded.animation.meta.endRegion = endRegion;
+    return loaded;
   } catch (error) {
     if (/document is not defined|Cannot read properties of undefined.*(?:getElementById|querySelector)/.test(error.message)) {
       error.message += ' The Canvas reader needs a drawing function; HTML/DOM setup is not supported in the worker.';

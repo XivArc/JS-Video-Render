@@ -31,6 +31,7 @@ const assets = new Map([
   ['/cloud/node_modules/fflate/esm/browser.js', ['cloud/node_modules/fflate/esm/browser.js', 'text/javascript']],
   ['/src/canvas-auto-repair.js', ['src/canvas-auto-repair.js', 'text/javascript']],
   ['/src/duration-settings.js', ['src/duration-settings.js', 'text/javascript']],
+  ['/src/ending-region.js', ['src/ending-region.js', 'text/javascript']],
   ['/src/animation-reader.js', ['src/animation-reader.js', 'text/javascript']],
 ]);
 
@@ -82,7 +83,7 @@ async function startServer() {
 }
 
 async function encode(source, fileName, settings, path, meta) {
-  const { totalFrames: total, drawFrames, holdFrames } = durationFramePlan(meta.duration, settings, meta.endLoop);
+  const { totalFrames: total, drawFrames, holdFrames } = durationFramePlan(meta.duration, settings, meta.endLoop ?? meta.endRegion);
   const started = performance.now();
   const rate = String(settings.bitrate);
   let tail = '';

@@ -1,10 +1,12 @@
 import { installCanvasAutoRepair } from './canvas-auto-repair.js';
 import { readAnimation } from './animation-reader.js';
+import { createEndRegionPainter } from './ending-region.js';
 
 let animation;
 let metadata;
 let previewCanvas;
 const canvasRepair = installCanvasAutoRepair();
+const paintFrame = createEndRegionPainter(paint);
 
 function describe(error) {
   return { name: error.name || 'Error', message: error.message || String(error) };
@@ -13,6 +15,7 @@ function describe(error) {
 async function loadAnimation(source, fileName, metadataDefaults) {
   const loaded = await readAnimation(source, canvasRepair, fileName, metadataDefaults);
   animation = loaded.animation;
+  previewCanvas = null;
   const m = animation.meta;
   for (const key of ['width', 'height', 'fps', 'duration']) {
     if (!Number.isFinite(m[key]) || m[key] <= 0) {
@@ -26,7 +29,7 @@ async function loadAnimation(source, fileName, metadataDefaults) {
     id: String(m.id || 'canvas_animation').slice(0, 150),
     title: String(m.title || m.id || 'Canvas animation').slice(0, 200),
     width: m.width, height: m.height, fps: m.fps, duration: m.duration,
-    endLoop: m.endLoop,
+    endLoop: m.endLoop, endRegion: m.endRegion,
     targetVideoBitrate: Number(m.targetVideoBitrate) || 12_000_000,
     reader: loaded.reader,
   };
@@ -71,15 +74,16 @@ self.onmessage = async ({ data }) => {
       self.postMessage({ id, ok: true, result: await loadAnimation(payload.source, payload.fileName,
         payload.metadataDefaults ?? payload.previewDefaults) });
     } else if (type === 'draw') {
-      const { width, height, time } = payload;
+      const { width, height, time, endingBaseTime } = payload;
       if (!previewCanvas || previewCanvas.width !== width || previewCanvas.height !== height) {
         previewCanvas = new OffscreenCanvas(width, height);
       }
-      paint(previewCanvas, Math.min(metadata.duration, Math.max(0, time)));
-      const bitmap = previewCanvas.transferToImageBitmap();
+      paintFrame(previewCanvas, Math.min(metadata.duration, Math.max(0, time)), metadata.endRegion, endingBaseTime);
+      // Keep the held canvas pixels for the next region frame.
+      const bitmap = endingBaseTime === undefined ? previewCanvas.transferToImageBitmap() : await createImageBitmap(previewCanvas);
       self.postMessage({ id, ok: true, result: { bitmap, time, canvasRepair: canvasRepair.report() } }, [bitmap]);
     } else if (type === 'png') {
-      const { width, height, time } = payload;
+      const { width, height, time, endingBaseTime } = payload;
       if (!Number.isInteger(width) || !Number.isInteger(height) || width < 16 || height < 16 ||
           width > 4096 || height > 4096 || !Number.isFinite(time) || time < 0 || time > metadata.duration) {
         throw new Error('Invalid frame dimensions or time.');
@@ -87,7 +91,7 @@ self.onmessage = async ({ data }) => {
       if (!previewCanvas || previewCanvas.width !== width || previewCanvas.height !== height) {
         previewCanvas = new OffscreenCanvas(width, height);
       }
-      paint(previewCanvas, time);
+      paintFrame(previewCanvas, time, metadata.endRegion, endingBaseTime);
       const blob = await previewCanvas.convertToBlob({ type: 'image/png' });
       const buffer = await blob.arrayBuffer();
       self.postMessage({ id, ok: true, result: { buffer, canvasRepair: canvasRepair.report() } }, [buffer]);
@@ -100,7 +104,7 @@ self.onmessage = async ({ data }) => {
       }
       if (!previewCanvas || previewCanvas.width !== width || previewCanvas.height !== height) previewCanvas = new OffscreenCanvas(width, height);
       for (let frame = start; frame < start + count; frame++) {
-        try { paint(previewCanvas, frame / fps); }
+        try { paintFrame(previewCanvas, frame / fps); }
         catch (error) { error.message = 'Frame ' + (frame + 1) + ' / ' + total + ' · ' + error.message; throw error; }
       }
       self.postMessage({ id, ok: true, result: { frame: start + count, total } });

@@ -60,9 +60,13 @@ the added time after its own duration. A source may declare
 `const END_LOOP = { start: 22, end: 25 }` for a seamless ending segment of a
 25-second animation. The end must match the source duration; if omitted it
 defaults to that duration. The renderer repeats only this segment at original
-speed. With no valid ending loop, FFmpeg clones the last frame without asking
-the browser to draw additional frames. Reports distinguish drawn and held
-frames. Older job files continue to use their original duration choices.
+speed. The original Copper Christmas Card source has a built-in region
+profile: the renderer preserves the final composition and continues the
+6.25-second ornament swing. Its leading duration, dimensions and FPS tuple
+is read as source metadata. With no valid ending loop or known moving region,
+FFmpeg clones the last frame without asking the browser to draw additional
+frames. Reports distinguish drawn and held frames. Older job files continue
+to use their original duration choices.
 Explicit source metadata and recognized leading header labels take
 precedence. Invalid declared values and conflicting headers still fail that
 file and allow the next source to run. Source JS is never rewritten. Metadata
