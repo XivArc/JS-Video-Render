@@ -2,6 +2,7 @@ import { installCanvasAutoRepair } from '../src/canvas-auto-repair.js';
 import { animationFrame } from '../src/duration-settings.js';
 import { readAnimation } from '../src/animation-reader.js';
 import { createEndRegionPainter } from '../src/ending-region.js';
+import { analyzeEnding } from '../src/ending-analysis.js';
 import { encodePng } from './png-frame.js';
 
 const repair = installCanvasAutoRepair();
@@ -52,6 +53,12 @@ self.onmessage = async ({ data: { id, type, payload } }) => {
     if (type === 'load') {
       fileName = payload.fileName;
       self.postMessage({ id, ok: true, result: await load(payload.source, payload.fileName, payload.metadataDefaults) });
+    } else if (type === 'analyze-ending') {
+      stage = 'ending-analysis';
+      self.postMessage({ id, ok: true, result: analyzeEnding(paint, meta.duration, payload) });
+    } else if (type === 'set-ending') {
+      meta.smartEnding = payload.plan;
+      self.postMessage({ id, ok: true });
     } else if (type === 'frame') {
       const { width, height, fps, frame, duration } = payload;
       if (![width, height, fps, frame].every(Number.isInteger) || width < 16 || height < 16 || width > 4096 || height > 4096 ||
@@ -61,7 +68,7 @@ self.onmessage = async ({ data: { id, type, payload } }) => {
       if (!canvas || canvas.width !== width || canvas.height !== height) canvas = new OffscreenCanvas(width, height);
       const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
       const { time, endingBaseTime } = animationFrame(frame / fps, meta, payload);
-      paintFrame(canvas, time, meta.endRegion, endingBaseTime);
+      paintFrame(canvas, time, meta.endRegion ?? meta.smartEnding?.endRegion, endingBaseTime);
       if (canvas.width !== width || canvas.height !== height) throw new Error('Animation changed the export canvas dimensions.');
       const drawMs = performance.now() - drawStarted;
       stage = 'pixel-readback';

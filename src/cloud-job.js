@@ -20,6 +20,9 @@ export function validateCloudJob(job) {
   if (extend && !validExtraSeconds(settings.extraSeconds)) {
     throw new Error('Add 1–' + MAX_EXTRA_SECONDS + ' whole seconds to extend the timeline.');
   }
+  if (extend && settings.endingBehavior !== undefined && !['smart', 'source'].includes(settings.endingBehavior)) {
+    throw new Error('Choose a supported ending behavior.');
+  }
   if (settings.bitrateMode !== 'manual') getBitrateProfile(settings.bitrateMode);
   let dimensions;
   if (settings.resolution === 'native') dimensions = { resolution: 'native' };
@@ -42,7 +45,7 @@ export function validateCloudJob(job) {
   });
   const normalized = { version: 1, id: job.id, settings: {
     format: settings.format, fps: settings.fps, durationChoice: settings.durationChoice, bitrateMode: settings.bitrateMode, ...dimensions,
-    ...(extend ? { extraSeconds: settings.extraSeconds } : {}),
+    ...(extend ? { extraSeconds: settings.extraSeconds, endingBehavior: settings.endingBehavior ?? 'source' } : {}),
   }, files };
   if (bytes(JSON.stringify(normalized)) > MAX_CLOUD_JOB_BYTES) throw new Error('The cloud job exceeds 20 MB. Select fewer files for this job.');
   return normalized;

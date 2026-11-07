@@ -1,6 +1,7 @@
 import { installCanvasAutoRepair } from './canvas-auto-repair.js';
 import { readAnimation } from './animation-reader.js';
 import { createEndRegionPainter } from './ending-region.js';
+import { analyzeEnding } from './ending-analysis.js';
 
 let animation;
 let metadata;
@@ -37,11 +38,10 @@ async function loadAnimation(source, fileName, metadataDefaults) {
 }
 
 function restrictAnimationIO(source, context = 'AI repair') {
-  const quick = context === 'Quick Preview';
   if (/\bimport\s*(?:\(|['"{*]|[A-Za-z_$])|\bexport\s+(?:\*|\{[^}]*\})\s*from\s*['"]|\b(?:eval|Function|importScripts)\s*\(/.test(source)) {
-    throw new Error((quick ? 'Quick Preview' : 'AI repair') + ' supports self-contained Canvas JavaScript without imports or dynamic code execution.');
+    throw new Error(context + ' supports self-contained Canvas JavaScript without imports or dynamic code execution.');
   }
-  const blocked = () => { throw new Error('Network access is disabled for ' + (quick ? 'Quick Preview animations.' : 'AI-repaired animations.')); };
+  const blocked = () => { throw new Error('Network access is disabled for ' + context + '.'); };
   for (const name of ['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'Worker', 'SharedWorker', 'importScripts']) {
     // Worker APIs can be inherited; shadow those as well as configurable own properties.
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
@@ -73,12 +73,17 @@ self.onmessage = async ({ data }) => {
       if (payload.restricted) restrictAnimationIO(payload.source, payload.restrictedContext);
       self.postMessage({ id, ok: true, result: await loadAnimation(payload.source, payload.fileName,
         payload.metadataDefaults ?? payload.previewDefaults) });
+    } else if (type === 'analyze-ending') {
+      self.postMessage({ id, ok: true, result: analyzeEnding(paint, metadata.duration, payload) });
+    } else if (type === 'set-ending') {
+      metadata.smartEnding = payload.plan;
+      self.postMessage({ id, ok: true });
     } else if (type === 'draw') {
       const { width, height, time, endingBaseTime } = payload;
       if (!previewCanvas || previewCanvas.width !== width || previewCanvas.height !== height) {
         previewCanvas = new OffscreenCanvas(width, height);
       }
-      paintFrame(previewCanvas, Math.min(metadata.duration, Math.max(0, time)), metadata.endRegion, endingBaseTime);
+      paintFrame(previewCanvas, Math.min(metadata.duration, Math.max(0, time)), metadata.endRegion ?? metadata.smartEnding?.endRegion, endingBaseTime);
       // Keep the held canvas pixels for the next region frame.
       const bitmap = endingBaseTime === undefined ? previewCanvas.transferToImageBitmap() : await createImageBitmap(previewCanvas);
       self.postMessage({ id, ok: true, result: { bitmap, time, canvasRepair: canvasRepair.report() } }, [bitmap]);
@@ -91,7 +96,7 @@ self.onmessage = async ({ data }) => {
       if (!previewCanvas || previewCanvas.width !== width || previewCanvas.height !== height) {
         previewCanvas = new OffscreenCanvas(width, height);
       }
-      paintFrame(previewCanvas, time, metadata.endRegion, endingBaseTime);
+      paintFrame(previewCanvas, time, metadata.endRegion ?? metadata.smartEnding?.endRegion, endingBaseTime);
       const blob = await previewCanvas.convertToBlob({ type: 'image/png' });
       const buffer = await blob.arrayBuffer();
       self.postMessage({ id, ok: true, result: { buffer, canvasRepair: canvasRepair.report() } }, [buffer]);

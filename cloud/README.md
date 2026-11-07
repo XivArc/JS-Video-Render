@@ -55,18 +55,28 @@ the nearest output frame. Duration constants, explicit units, and total frame
 count with declared source FPS are also recognized.
 To add time at the original speed, use `durationChoice: "extend"` and
 `extraSeconds: 10` in the job settings (1–60 whole seconds). Each file gets
-the added time after its own duration. A source may declare
+the added time after its own duration. The website's **Smart Preserve** option
+sends `endingBehavior: "smart"`. The runner samples small frames near the
+end to look for a repeating region and a stable composition before a fade.
+It holds that composition from before the fade, so titles and other elements
+can stay visible as the detected region keeps moving. The analysis uses the
+same Canvas source, with no model, API key, or separate service.
+
+A source may declare
 `meta.endLoop: { start: 22, end: 25 }` or a top-level
 `const END_LOOP = { start: 22, end: 25 }` for a seamless ending segment of a
 25-second animation. The end must match the source duration; if omitted it
-defaults to that duration. The renderer repeats only this segment at original
-speed. The original Copper Christmas Card source has a built-in region
-profile: the renderer preserves the final composition and continues the
-6.25-second ornament swing. Its leading duration, dimensions and FPS tuple
-is read as source metadata. With no valid ending loop or known moving region,
-FFmpeg clones the last frame without asking the browser to draw additional
-frames. Reports distinguish drawn and held frames. Older job files continue
-to use their original duration choices.
+defaults to that duration. The renderer honors that declaration and repeats
+only that segment. The original Copper Christmas Card source has a built-in
+profile: Smart Preserve keeps the composition from 21.6 seconds and continues
+the 6.25-second ornament swing. Its leading duration, dimensions and FPS tuple
+is read as source metadata. For other files, detection works best when the
+motion occupies a small area and repeats at least twice near the end. When
+neither a repeat nor a fade can be confirmed, FFmpeg clones the last frame.
+Reports distinguish drawn and held frames. **Follow original ending**
+(`endingBehavior: "source"`, also the default for old jobs) keeps the
+source's original ending and skips the automatic analysis.
+
 Explicit source metadata and recognized leading header labels take
 precedence. Invalid declared values and conflicting headers still fail that
 file and allow the next source to run. Source JS is never rewritten. Metadata

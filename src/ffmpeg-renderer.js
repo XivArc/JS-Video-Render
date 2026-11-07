@@ -3,8 +3,9 @@ import { Input, BufferSource, MP4, QTFF } from 'mediabunny';
 import coreScript from '@ffmpeg/core?url';
 import coreWasm from '@ffmpeg/core/wasm?url';
 import { validateTargetBitrate, verifiedBitrate, nextBitrate, bitrateRangeText } from './bitrate-profiles.js';
-import { animationFrame, durationFramePlan } from './duration-settings.js';
+import { animationFrame, animationFramePlan, shouldAnalyzeEnding } from './duration-settings.js';
 import { animationDefaults } from './animation-reader.js';
+import { probeEnding } from './ending-probe.js';
 
 const MAX_OUTPUT_BYTES = 500_000_000;
 const MAX_WORKING_FILES_BYTES = 600_000_000;
@@ -12,6 +13,7 @@ const MAX_WORKING_FILES_BYTES = 600_000_000;
 export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
   let ffmpeg;
   let canvasBridge;
+  let endingProbe;
   let inspection;
   let cancelled = false;
   let running = false;
@@ -44,9 +46,17 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
         throw new Error('FFmpeg export is limited to approximately 500 MB or 30,000 frames. Reduce the duration or bitrate.');
       }
       canvasBridge = makeCanvasBridge();
-      const meta = await canvasBridge.call('load', { source, fileName,
-        metadataDefaults: metadataDefaults ?? animationDefaults(s) }, [], 15_000);
-      const { drawFrames, holdFrames } = durationFramePlan(meta.duration, s, meta.endLoop ?? meta.endRegion);
+      const load = { source, fileName, metadataDefaults: metadataDefaults ?? animationDefaults(s) };
+      const meta = await canvasBridge.call('load', load, [], 15_000);
+      if (shouldAnalyzeEnding(meta, s)) {
+        emit({ event: 'phase', phase: 'loading', message: 'Analyzing the ending…' });
+        endingProbe = makeCanvasBridge();
+        try { meta.smartEnding = await probeEnding(endingProbe, load, s); }
+        finally { endingProbe = null; }
+        checkCancelled();
+        if (meta.smartEnding?.endRegion) await canvasBridge.call('set-ending', { plan: meta.smartEnding }, [], 6000);
+      }
+      const { drawFrames, holdFrames } = animationFramePlan(meta, s);
       checkCancelled();
       emit({ event: 'phase', phase: 'loading', message: 'Loading the local video encoder…' });
       ffmpeg = new FFmpeg();
@@ -203,6 +213,7 @@ export function makeFfmpegBridge(makeCanvasBridge, onEvent) {
     },
     dispose() {
       cancelled = true;
+      if (endingProbe) endingProbe.dispose();
       if (canvasBridge) canvasBridge.dispose();
       if (inspection) inspection.dispose();
       if (ffmpeg) ffmpeg.terminate();

@@ -9,7 +9,7 @@ import { chromium } from 'playwright';
 import { validateCloudJob, MAX_CLOUD_JOB_BYTES } from '../src/cloud-job.js';
 import { nextBitrate, verifiedBitrate } from '../src/bitrate-profiles.js';
 import { exportDimensions } from '../src/render-settings.js';
-import { durationFramePlan, durationSettings } from '../src/duration-settings.js';
+import { animationFramePlan, durationSettings, shouldAnalyzeEnding } from '../src/duration-settings.js';
 import { animationDefaults } from '../src/animation-reader.js';
 import { outputFileName, uniqueOutputName } from '../src/render-queue.js';
 import { writePngFrame } from './frame-stream.mjs';
@@ -32,6 +32,7 @@ const assets = new Map([
   ['/src/canvas-auto-repair.js', ['src/canvas-auto-repair.js', 'text/javascript']],
   ['/src/duration-settings.js', ['src/duration-settings.js', 'text/javascript']],
   ['/src/ending-region.js', ['src/ending-region.js', 'text/javascript']],
+  ['/src/ending-analysis.js', ['src/ending-analysis.js', 'text/javascript']],
   ['/src/animation-reader.js', ['src/animation-reader.js', 'text/javascript']],
 ]);
 
@@ -83,7 +84,7 @@ async function startServer() {
 }
 
 async function encode(source, fileName, settings, path, meta) {
-  const { totalFrames: total, drawFrames, holdFrames } = durationFramePlan(meta.duration, settings, meta.endLoop ?? meta.endRegion);
+  const { totalFrames: total, drawFrames, holdFrames } = animationFramePlan(meta, settings);
   const started = performance.now();
   const rate = String(settings.bitrate);
   let tail = '';
@@ -191,10 +192,22 @@ async function renderFile(file, job, index, used) {
         const loadSource = () => page.evaluate(({ source, name, metadataDefaults }) =>
           window.loadAnimation(source, name, metadataDefaults), loadPayload);
         const meta = await loadSource();
-        record.sourceMetadata = meta;
         const settings = { ...job.settings, ...exportDimensions(job.settings, meta),
           ...durationSettings(meta.duration, job.settings.durationChoice, job.settings.fps, job.settings.extraSeconds) };
         if (settings.duration * settings.fps < 1 || settings.duration * settings.fps > 30000) throw new Error('Cloud export supports 1–30,000 frames per video.');
+        const loadForRender = async () => {
+          await loadSource();
+          if (meta.smartEnding) await page.evaluate(plan => window.setEnding(plan), meta.smartEnding);
+        };
+        if (shouldAnalyzeEnding(meta, settings)) {
+          try {
+            meta.smartEnding = await page.evaluate(dimensions => window.analyzeEnding(dimensions),
+              { width: settings.width, height: settings.height });
+          } catch { meta.smartEnding = null; }
+          // Discard the probe worker and start with a fresh animation.
+          await loadForRender();
+        }
+        record.sourceMetadata = meta;
         let target = file.bitrate;
         if (!path) for (;;) {
           outputName = uniqueOutputName(outputFileName(file.fileName, settings), used);
@@ -209,7 +222,7 @@ async function renderFile(file, job, index, used) {
             throw new Error('Cloud output exceeds the available disk budget (2 GB/video, 8 GB/job). Choose fewer files or a shorter duration.');
           }
           settings.bitrate = target;
-          if (attempt > 1) { await openRenderer(); await loadSource(); }
+          if (attempt > 1) { await openRenderer(); await loadForRender(); }
           log(settings.width + 'x' + settings.height + ' · ' + settings.fps + ' FPS · ' + settings.duration + ' s · target ' + (target / 1e6).toFixed(3) + ' Mbps');
           encodingAttempts++;
           const metrics = await encode(file.source, file.fileName, settings, path, meta);

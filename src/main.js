@@ -8,7 +8,8 @@ import { BITRATE_PROFILES, getBitrateProfile, randomBitrate, validateTargetBitra
 import { validateDimensions, exportDimensions } from './render-settings.js';
 import { MAX_QUEUE_FILES, createRenderQueue, outputFileName, uniqueOutputName } from './render-queue.js';
 import { MAX_AI_SOURCE_BYTES, repairEndpoint, callRepairBackend, applyRepairEdits, validateAnimation } from './ai-repair.js';
-import { FIXED_DURATIONS, MAX_EXTRA_SECONDS, validExtraSeconds, durationSettings, animationFrame } from './duration-settings.js';
+import { FIXED_DURATIONS, MAX_EXTRA_SECONDS, validExtraSeconds, durationSettings, animationFrame, selectedEnding, shouldAnalyzeEnding } from './duration-settings.js';
+import { probeEnding } from './ending-probe.js';
 import { CLOUD_PANEL_HTML, makeCloudControls } from './cloud-controls.js';
 import { PREVIEW_TABS_HTML, QUICK_PREVIEW_HTML, makeQuickPreview } from './quick-preview.js';
 import { animationDefaults } from './animation-reader.js';
@@ -48,6 +49,7 @@ document.querySelector('#app').innerHTML = [
   '<label>Duration mode<select id="duration-mode" aria-describedby="duration-note"><option value="fit">Fit to Duration</option><option value="extend">Extend Timeline</option></select></label>',
   '<label id="fit-duration">Target duration<select id="duration" aria-describedby="duration-note"><option value="full">Full animation · original duration</option>' + durationOptions + '<option value="2">Quick test · 2 seconds</option><option value="5">Quick test · 5 seconds</option></select></label>',
   '<label id="extend-duration" hidden>Add time (seconds)<input id="extra-seconds" type="number" min="1" max="' + MAX_EXTRA_SECONDS + '" step="1" value="10" required disabled aria-describedby="duration-note"></label>',
+  '<label id="ending-behavior-field" hidden>Ending<select id="ending-behavior" disabled aria-describedby="duration-note"><option value="smart">Smart Preserve</option><option value="source">Follow original ending</option></select></label>',
   '<p id="duration-note" class="field-note" aria-live="polite">Full animation uses each file’s original duration.</p>',
   '<label>Bitrate mode<select id="bitrate-mode">' + bitrateOptions + '</select></label>',
   '<label>Target bitrate<div class="bitrate-field"><input id="bitrate" type="number" min="40" max="51" step="0.001" value="45.123" required readonly aria-label="Target bitrate in Mbps"><span>Mbps</span><button id="random-bitrate" type="button" title="Pick a new target within the selected range">Randomize</button></div></label>',
@@ -74,7 +76,7 @@ const state = {
   playing: false, raf: 0, time: 0, origin: 0, originTime: 0,
   drawing: false, pendingTime: null, previewFrame: null, loading: false, busy: false, cancelRequested: false, fileStream: null,
   activeSettings: null, lastRenderBitrate: null, jobs: [], currentJob: null, preparing: null, repairing: null,
-  cloudQueueJobId: null, previewJob: null,
+  cloudQueueJobId: null, previewJob: null, endingProbe: null,
 };
 const fileResolution = makePreviewResolution($('preview'), () => {
   if (state.preview && !state.drawing && fileResolution.needsRedraw(state.meta)) void draw(state.time);
@@ -153,15 +155,17 @@ function updateControls() {
   const rendering = (state.busy && !isCloud() && !state.repairing) || cloudControls.activity === 'in_progress';
   const queued = !state.repairing && ((state.busy && isCloud()) || cloudControls.running);
   prism.setState(rendering ? 'rendering' : queued ? 'queued' : 'idle');
-  const blocked = state.busy || state.loading || cloudControls.running || cloudControls.connecting;
+  const blocked = state.busy || state.loading || Boolean(state.endingProbe) || cloudControls.running || cloudControls.connecting;
   $('file').disabled = blocked;
   $('upload-zone').classList.toggle('disabled', blocked);
   for (const element of $('settings').querySelectorAll('input, select, button')) element.disabled = blocked;
   const extended = $('duration-mode').value === 'extend';
   $('fit-duration').hidden = extended;
   $('extend-duration').hidden = !extended;
+  $('ending-behavior-field').hidden = !extended;
   $('duration').disabled = blocked || extended;
   $('extra-seconds').disabled = blocked || !extended;
+  $('ending-behavior').disabled = blocked || !extended;
   $('save-mode').disabled = blocked || isCloud();
   $('render').disabled = blocked || quickPreview?.active || !state.jobs.length || (!isCloud() && !browserReady) ||
     (extended && !validExtraSeconds($('extra-seconds').valueAsNumber));
@@ -178,7 +182,7 @@ function updateControls() {
 
 function durationPreferences() {
   return $('duration-mode').value === 'extend' ?
-    { durationChoice: 'extend', extraSeconds: $('extra-seconds').valueAsNumber } :
+    { durationChoice: 'extend', extraSeconds: $('extra-seconds').valueAsNumber, endingBehavior: $('ending-behavior').value } :
     { durationChoice: $('duration').value };
 }
 
@@ -211,7 +215,7 @@ function readAnimationDefaults(preferences) {
 function settingsFor(meta, preferences, bitrate = preferences.bitrate) {
   return {
     format: preferences.format, ...exportDimensions(preferences, meta), fps: preferences.fps,
-    engine: preferences.engine, bitrateMode: preferences.bitrateMode, bitrate,
+    engine: preferences.engine, bitrateMode: preferences.bitrateMode, bitrate, endingBehavior: preferences.endingBehavior,
     ...durationSettings(meta.duration, preferences.durationChoice, preferences.fps, preferences.extraSeconds),
   };
 }
@@ -279,28 +283,34 @@ function pause() {
 }
 
 function previewTiming() {
-  const { durationChoice, extraSeconds } = durationPreferences();
+  const { durationChoice, extraSeconds, endingBehavior } = durationPreferences();
   const choice = durationChoice === 'extend' && !validExtraSeconds(extraSeconds) ? 'full' : durationChoice;
   const fps = Number($('fps').value);
-  return { fps, ...durationSettings(state.meta.duration, choice, fps, extraSeconds) };
+  return { fps, endingBehavior, ...durationSettings(state.meta.duration, choice, fps, extraSeconds) };
 }
 
 function updateDurationNote() {
-  const { durationChoice: choice, extraSeconds } = durationPreferences();
+  const { durationChoice: choice, extraSeconds, endingBehavior } = durationPreferences();
   if (choice === 'extend') {
     if (!validExtraSeconds(extraSeconds)) {
       $('duration-note').textContent = 'Enter 1–' + MAX_EXTRA_SECONDS + ' whole seconds to extend the timeline.';
+    } else if (state.endingProbe) {
+      $('duration-note').textContent = 'Analyzing the ending…';
     } else if (state.meta) {
-      const { duration } = previewTiming();
+      const timing = previewTiming(), { duration } = timing;
       const seconds = value => Number(value.toFixed(3)) + ' s';
-      const ending = state.meta.endLoop ? 'End loop' : state.meta.endRegion?.label ?? 'Hold last frame';
+      const { loop, region, holdAt } = selectedEnding(state.meta, timing);
+      const ending = loop ? 'End loop' : region?.label ?? (Number.isFinite(holdAt) ? 'Keep composition' : 'Hold last frame');
       $('duration-note').textContent = seconds(duration - extraSeconds) + ' + ' + seconds(extraSeconds) +
         ' = ' + seconds(duration) + ' · ' + ending +
+        (Number.isFinite(holdAt) ? ' · Hold from ' + seconds(holdAt) : '') +
         (state.meta.reader.defaulted.includes('duration') ? ' · Source defaults to 20 s' : '') +
         (state.jobs.length > 1 ? ' · Time added to each file' : '');
     } else {
       $('duration-note').textContent = 'Adds ' + extraSeconds +
-        ' seconds to each file at its original speed. Repeats a declared end loop or holds the final frame.';
+        (endingBehavior === 'smart' ?
+          ' seconds. Smart Preserve looks for repeating motion and a stable composition before the fade.' :
+          ' seconds at the original speed. Uses the source ending.');
     }
   } else if (choice === 'full') {
     $('duration-note').textContent = state.meta?.reader?.defaulted?.includes('duration') ?
@@ -314,13 +324,34 @@ function updateDurationNote() {
   }
 }
 
-function updatePreviewTiming() {
+async function analyzePreviewEnding() {
+  const { meta, preview } = state;
+  if (!meta || !preview || state.endingProbe || !shouldAnalyzeEnding(meta, previewTiming())) return;
+  const probe = makeBridge();
+  state.endingProbe = probe;
+  updateControls(); updateDurationNote();
+  try {
+    const plan = await probeEnding(probe, { source: state.source, fileName: state.fileName, metadataDefaults: meta }, meta);
+    if (state.preview !== preview || state.meta !== meta) return;
+    if (plan?.endRegion) await preview.call('set-ending', { plan }, [], 6000);
+    meta.smartEnding = plan;
+  } catch {
+    if (state.meta === meta) meta.smartEnding = null;
+  } finally {
+    if (state.endingProbe === probe) state.endingProbe = null;
+    updateControls(); updateDurationNote();
+  }
+}
+
+async function updatePreviewTiming() {
   updateDurationNote();
   updateEstimate();
   if (!state.meta || !state.preview) return;
   pause();
+  const preview = state.preview;
   $('seek').max = previewTiming().duration;
-  void draw(0);
+  await analyzePreviewEnding();
+  if (state.preview === preview) void draw(0);
 }
 
 async function draw(time) {
@@ -338,7 +369,8 @@ async function draw(time) {
     const frame = animationFrame(time, state.meta, timing);
     const sourceTime = frame.time;
     const previous = state.previewFrame;
-    const reuse = timing.durationMode === 'extend' && !(state.meta.endLoop ?? state.meta.endRegion) && previous?.bridge === bridge &&
+    const { loop, region } = selectedEnding(state.meta, timing);
+    const reuse = timing.durationMode === 'extend' && !loop && !region && previous?.bridge === bridge &&
       previous.width === width && previous.height === height && previous.sourceTime === sourceTime;
     if (!reuse) {
       const { bitmap, canvasRepair } = await bridge.call('draw', { width, height, ...frame }, [], 10000);
@@ -565,7 +597,7 @@ $('ai-check').addEventListener('click', async () => {
 });
 
 async function loadPreview(job, initial = false) {
-  if (state.busy || state.loading) return;
+  if (state.busy || state.loading || state.endingProbe) return;
   state.loading = true;
   state.previewJob = job;
   quickPreview.showFiles();
@@ -600,6 +632,7 @@ async function loadPreview(job, initial = false) {
     $('empty-state').hidden = true;
     if (initial) $('fps').value = ['24', '25', '30', '50', '60'].includes(String(state.meta.fps)) ?
       String(state.meta.fps) : '30';
+    await analyzePreviewEnding();
     $('seek').max = previewTiming().duration;
     updateDurationNote();
     $('stage').style.aspectRatio = state.meta.width + ' / ' + state.meta.height;
@@ -630,7 +663,7 @@ async function loadPreview(job, initial = false) {
 }
 
 async function selectFiles(files) {
-  if (state.busy || state.loading || cloudControls.running || cloudControls.connecting) return;
+  if (state.busy || state.loading || state.endingProbe || cloudControls.running || cloudControls.connecting) return;
   files = Array.from(files);
   if (!files.length) return;
   if (files.length > MAX_QUEUE_FILES) {
@@ -713,7 +746,7 @@ $('settings').addEventListener('input', updateEstimate);
 $('engine').addEventListener('change', updateEngineNotes);
 $('bitrate-mode').addEventListener('change', () => updateBitrateMode());
 $('resolution').addEventListener('change', updateResolutionMode);
-for (const [id, event] of [['duration-mode', 'change'], ['extra-seconds', 'input']]) {
+for (const [id, event] of [['duration-mode', 'change'], ['extra-seconds', 'input'], ['ending-behavior', 'change']]) {
   $(id).addEventListener(event, () => { updateControls(); updatePreviewTiming(); });
 }
 $('duration').addEventListener('change', updatePreviewTiming);

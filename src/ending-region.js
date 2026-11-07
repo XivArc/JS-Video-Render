@@ -4,6 +4,7 @@ const copperChristmasCard = {
   label: 'Ornament loop',
   start: 18.75,
   end: 25,
+  holdAt: 21.6,
   region: { x: 1502, y: 114, width: 164, height: 272, designWidth: 1920, designHeight: 1080 },
 };
 const copperChristmasDigest = '3d5e6e9b3f1469961eb8f01d48d4b64c1a79b0b372e4d9fb81c388a01d87ad60';
@@ -28,23 +29,30 @@ export function createEndRegionPainter(draw) {
       throw new Error('Invalid held frame for the ending region.');
     }
     const { width, height } = canvas;
-    const { x, y, width: regionWidth, height: regionHeight, designWidth, designHeight } = endRegion.region;
     if (held?.canvas !== canvas || held.width !== width || held.height !== height || held.time !== endingBaseTime) {
       draw(canvas, endingBaseTime);
     }
-    // The known source fits its design into a centered viewport. Clip to
-    // whole output pixels so the surrounding held image stays untouched.
-    const scale = Math.min(width / designWidth, height / designHeight);
-    const offsetX = (width - designWidth * scale) / 2, offsetY = (height - designHeight * scale) / 2;
-    const left = Math.floor(offsetX + x * scale), top = Math.floor(offsetY + y * scale);
-    const right = Math.ceil(offsetX + (x + regionWidth) * scale), bottom = Math.ceil(offsetY + (y + regionHeight) * scale);
     const ctx = canvas.getContext('2d');
     held = undefined;
     ctx.save();
     try {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.beginPath();
-      ctx.rect(left, top, right - left, bottom - top);
+      if (endRegion.regions) {
+        for (const { x, y, width: w, height: h } of endRegion.regions) {
+          const left = Math.round(x * width), top = Math.round(y * height);
+          const right = Math.round((x + w) * width), bottom = Math.round((y + h) * height);
+          ctx.rect(left, top, right - left, bottom - top);
+        }
+      } else {
+        // This source positions its design inside a centered viewport.
+        const { x, y, width: w, height: h, designWidth, designHeight } = endRegion.region;
+        const scale = Math.min(width / designWidth, height / designHeight);
+        const offsetX = (width - designWidth * scale) / 2, offsetY = (height - designHeight * scale) / 2;
+        const left = Math.floor(offsetX + x * scale), top = Math.floor(offsetY + y * scale);
+        ctx.rect(left, top, Math.ceil(offsetX + (x + w) * scale) - left,
+          Math.ceil(offsetY + (y + h) * scale) - top);
+      }
       ctx.clip();
       ctx.beginPath();
       draw(canvas, time);

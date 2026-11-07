@@ -93,6 +93,36 @@ function extensionFrame(time, settings) {
   return Math.min(frameCount(settings.duration, settings.fps) - 1, Math.floor(time * settings.fps + 1e-8));
 }
 
+export function shouldAnalyzeEnding(meta, settings) {
+  return settings.durationMode === 'extend' && settings.endingBehavior === 'smart' &&
+    !meta.endLoop && !meta.endRegion && meta.smartEnding === undefined;
+}
+
+export function selectedEnding(meta, settings) {
+  if (settings.durationMode !== 'extend') return {};
+  if (meta.endLoop) return { loop: meta.endLoop };
+  const smart = settings.endingBehavior === 'smart';
+  return {
+    region: meta.endRegion ?? (smart ? meta.smartEnding?.endRegion : undefined),
+    holdAt: smart ? meta.endRegion?.holdAt ?? meta.smartEnding?.holdAt : undefined,
+  };
+}
+
+function holdFrame(meta, settings, holdAt) {
+  const last = frameCount(meta.duration, settings.fps) - 1;
+  return Number.isFinite(holdAt) ? Math.min(last, Math.max(0, Math.floor(holdAt * settings.fps + 1e-8))) : last;
+}
+
+export function animationFramePlan(meta, settings) {
+  const { loop, region, holdAt } = selectedEnding(meta, settings);
+  const plan = durationFramePlan(meta.duration, settings, loop ?? region);
+  if (!loop && !region && Number.isFinite(holdAt)) {
+    plan.drawFrames = holdFrame(meta, settings, holdAt) + 1;
+    plan.holdFrames = plan.totalFrames - plan.drawFrames;
+  }
+  return plan;
+}
+
 export function animationTime(outputTime, sourceDuration, settings, endLoop) {
   const time = Math.max(0, Math.min(settings.duration, outputTime));
   if (settings.durationMode === 'extend') {
@@ -113,11 +143,11 @@ export function animationTime(outputTime, sourceDuration, settings, endLoop) {
 }
 
 export function animationFrame(outputTime, meta, settings) {
-  const { duration, endLoop, endRegion } = meta;
-  const time = animationTime(outputTime, duration, settings, endLoop ?? endRegion);
-  if (settings.durationMode !== 'extend' || endLoop || !endRegion) return { time };
-  const originalFrames = frameCount(duration, settings.fps);
+  const { loop, region, holdAt } = selectedEnding(meta, settings);
+  const time = animationTime(outputTime, meta.duration, settings, loop ?? region);
+  if (!region && !Number.isFinite(holdAt)) return { time };
+  const baseFrame = holdFrame(meta, settings, holdAt);
   const outputFrame = extensionFrame(Math.max(0, Math.min(settings.duration, outputTime)), settings);
-  return outputFrame < originalFrames ? { time } :
-    { time, endingBaseTime: (originalFrames - 1) / settings.fps };
+  if (outputFrame < (Number.isFinite(holdAt) ? baseFrame : frameCount(meta.duration, settings.fps))) return { time };
+  return region ? { time, endingBaseTime: baseFrame / settings.fps } : { time: baseFrame / settings.fps };
 }
