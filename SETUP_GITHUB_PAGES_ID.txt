@@ -1,0 +1,77 @@
+CANVAS VIDEO STUDIO — SETUP GITHUB PAGES TANPA CMD
+
+Paket ini berisi project lengkap dan workflow deployment otomatis.
+Website belum terpublikasi hanya dengan mengunduh ZIP. Ikuti langkah berikut
+jika GitHub belum dihubungkan untuk publikasi langsung dari percakapan.
+
+1. EKSTRAK ZIP
+   Ekstrak semua isi ZIP ke satu folder. Jangan mengunggah file ZIP-nya.
+   Paket ini sudah berisi src, package.json, package-lock.json,
+   vite.config.js, index.html, serta .github/workflows/deploy.yml.
+   Tidak perlu mengunggah folder project lama atau node_modules.
+
+2. BUAT REPOSITORY
+   Buka https://github.com/new dan login ke akun GitHub-mu.
+   Repository name: js-video-renderer
+   Pilih Public untuk memakai GitHub Pages melalui GitHub Free.
+   Centang Add a README agar repository langsung memiliki branch.
+   Klik Create repository. Panduan dan workflow ini menggunakan branch main.
+
+3. UPLOAD PROJECT
+   Pada repository, pilih Add file -> Upload files.
+   Seret semua isi folder hasil ekstrak ke area upload.
+   Pastikan file berada langsung di root repository, bukan di dalam folder
+   pembungkus bernama canvas-video-studio atau folder ekstrak lainnya.
+   Pilih Commit directly to the main branch, lalu Commit changes.
+
+   Pastikan struktur penting berikut terlihat:
+   - src/main.js dan file src lainnya, termasuk folder fonts
+   - package.json dan package-lock.json
+   - index.html dan vite.config.js
+   - .github/workflows/deploy.yml
+
+   Jika browser tidak mengunggah folder .github:
+   pilih Add file -> Create new file.
+   Isi nama file: .github/workflows/deploy.yml
+   Buka file deploy.yml dari ZIP dengan Notepad, salin seluruh isinya,
+   tempel ke editor GitHub, lalu Commit changes ke main.
+
+4. AKTIFKAN GITHUB PAGES
+   Buka Settings -> Pages pada repository.
+   Di Build and deployment, pilih Source: GitHub Actions.
+   GitHub yang akan menjalankan npm ci dan npm run build; kamu tidak perlu CMD.
+
+5. JALANKAN DEPLOYMENT
+   Buka tab Actions.
+   Pilih Deploy Canvas Video Studio to GitHub Pages.
+   Klik Run workflow, pilih branch main, lalu Run workflow.
+   Jika deployment awal gagal karena Pages belum diaktifkan, jalankan lagi
+   setelah langkah 4 selesai.
+   Tunggu semua langkah selesai dengan tanda centang hijau.
+
+6. BUKA WEBSITE
+   Buka Settings -> Pages lalu gunakan link website yang ditampilkan.
+   Alamat normalnya: https://USERNAME.github.io/js-video-renderer/
+   USERNAME di alamat contoh harus sesuai username akun GitHub-mu.
+   Simpan link itu sebagai bookmark. Selanjutnya kamu cukup membuka link,
+   memilih maksimal 10 file .js, render, lalu download hasilnya.
+
+SAAT MENGGUNAKAN WEBSITE
+- Tidak perlu menjalankan npm run dev atau membuka CMD di laptop.
+- Render tetap memakai CPU/RAM perangkat yang membuka website.
+- Jangan tutup tab sampai proses render selesai.
+- File animasi dan video tetap di perangkatmu, tidak diunggah ke GitHub.
+- Jangan unggah file animasi pribadi atau hasil video ke repository.
+- Saat render pertama, browser memuat FFmpeg termasuk file WebAssembly
+  sekitar 32 MB. Ini wajar; internet diperlukan untuk memuat website.
+- Centang hijau berarti berhasil; centang merah berarti gagal dan antrean
+  otomatis lanjut ke file berikutnya.
+- Pengaturan Auto Random dan verifikasi bitrate tetap sama.
+
+UPDATE WEBSITE NANTI
+Unggah file project yang berubah ke branch main, lalu Commit changes.
+Workflow akan build dan deploy ulang secara otomatis.
+Setelah deployment selesai, refresh website dengan Ctrl+F5.
+
+Paket ini juga tetap bisa digunakan pada project lokal yang lama.
+Konfigurasi subfolder GitHub Pages hanya diterapkan saat workflow build online.

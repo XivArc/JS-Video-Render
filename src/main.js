@@ -1,0 +1,1127 @@
+import './style.css';
+import './studio-ui.css';
+import { fullscreenButton, makePreviewFullscreen } from './preview-fullscreen.js';
+import { makePreviewResolution } from './preview-resolution.js';
+import { BRAND_MARK_HTML, PRISM_ART_HTML, makePrismAnimation } from './prism-art.js';
+import { makeFfmpegBridge } from './ffmpeg-renderer.js';
+import { BITRATE_PROFILES, getBitrateProfile, randomBitrate, validateTargetBitrate, verifiedBitrate, nextBitrate, bitrateRangeText } from './bitrate-profiles.js';
+import { validateDimensions, exportDimensions } from './render-settings.js';
+import { MAX_QUEUE_FILES, createRenderQueue, outputFileName, uniqueOutputName } from './render-queue.js';
+import { MAX_AI_SOURCE_BYTES, repairEndpoint, callRepairBackend, applyRepairEdits, validateAnimation } from './ai-repair.js';
+import { FIXED_DURATIONS, MAX_EXTRA_SECONDS, validExtraSeconds, durationSettings, animationFrame, selectedEnding, shouldAnalyzeEnding } from './duration-settings.js';
+import { probeEnding } from './ending-probe.js';
+import { CLOUD_PANEL_HTML, makeCloudControls } from './cloud-controls.js';
+import { PREVIEW_TABS_HTML, QUICK_PREVIEW_HTML, makeQuickPreview } from './quick-preview.js';
+import { animationDefaults } from './animation-reader.js';
+
+document.title = 'Prysm Motion Studio';
+document.documentElement.lang = 'en';
+
+const uploadIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M5 14v5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5"/></svg>';
+const fileIcon = '<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M19 3H8a2 2 0 0 0-2 2v22a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V10L19 3Zm0 0v7h7M12 16l-3 3 3 3m8-6 3 3-3 3m-3-7-2 10"/></svg>';
+const bitrateOptions = Object.values(BITRATE_PROFILES).map((profile) =>
+  '<option value="' + profile.id + '"' + (profile.id === '1080p' ? ' selected' : '') + '>Auto Random · ' + profile.minMbps + '–' + profile.maxMbps + ' Mbps</option>').join('') +
+  '<option value="manual">Manual · enter Mbps</option>';
+const durationOptions = FIXED_DURATIONS.map(seconds =>
+  '<option value="' + seconds + '">' + seconds + ' seconds</option>').join('');
+
+document.querySelector('#app').innerHTML = [
+  '<main class="studio" id="top">',
+  '<header class="topbar"><a class="brand" href="#top" aria-label="Prysm Motion Studio home"><span class="brand-mark" aria-hidden="true">' + BRAND_MARK_HTML + '</span><span class="brand-name"><strong>PRYSM</strong><span>MOTION STUDIO</span></span></a><nav class="nav-links" aria-label="Studio navigation"><a href="#workspace">Studio</a><a href="#export-settings">Export</a><a href="#render-status">Status</a></nav><span class="local-badge"><i></i>Runs on your device</span></header>',
+  '<section class="intro"><div class="intro-content"><p class="eyebrow"><span class="eyebrow-line"></span>YOUR BROWSER. YOUR RENDER ENGINE.</p><h1>TURN CODE<br>INTO <span>MOTION.</span></h1><p class="intro-copy">Transform your JavaScript animations into crisp, smooth video. Drop your animation files, choose your settings, and render in GitHub Cloud or on your device.</p><div class="feature-tags"><span>MP4 &amp; MOV</span><span>UP TO 4K</span><span>60 FPS</span></div></div>' + PRISM_ART_HTML + '</section>',
+  '<div class="workspace" id="workspace">',
+  '<section class="preview-panel"><div class="panel-heading"><div class="panel-title"><span class="section-number">01</span><h2>Animation preview</h2></div><span id="source-badge" class="muted">No file loaded</span></div>',
+  PREVIEW_TABS_HTML,
+  '<div id="preview-files-content" role="tabpanel" aria-labelledby="preview-files-tab">',
+  '<div id="files-viewport" class="preview-viewport" tabindex="-1" role="region" aria-label="Animation file preview">',
+  '<div id="stage" class="stage"><canvas id="preview" width="960" height="540"></canvas><div id="empty-state" class="empty-state"><span class="canvas-symbol">' + fileIcon + '</span><h3>YOUR NEXT FRAME<br>STARTS HERE.</h3><p>Drop your JavaScript files here to preview and render.</p><span class="empty-tag">CANVAS 2D / JAVASCRIPT</span></div></div>',
+  '<div class="playback"><button id="play" class="icon-button" disabled aria-label="Play or pause preview">▶</button><input id="seek" aria-label="Preview time" type="range" min="0" max="20" step="0.01" value="0" disabled><span id="time" class="time">0.00 / 0.00 s</span>' + fullscreenButton('files-fullscreen') + '</div>',
+  '</div>',
+  '<div class="file-details"><span class="file-detail-icon" aria-hidden="true">JS</span><div><strong id="animation-title">Canvas 2D animation</strong><span id="metadata">Animation details will appear here.</span></div><span class="file-detail-label">SOURCE</span></div></div>',
+  QUICK_PREVIEW_HTML,
+  '</section>',
+  '<aside class="settings-panel" id="export-settings"><div class="panel-heading"><div class="panel-title"><span class="section-number">02</span><h2>Export settings</h2></div><span class="step-chip">H.264</span></div>',
+  '<label class="upload-zone" id="upload-zone"><span class="upload-icon">' + uploadIcon + '</span><strong id="file-label">Drop JavaScript files here</strong><span>or click to browse · Up to 10 .js files · 5 MB each</span><input id="file" type="file" accept=".js,text/javascript,application/javascript" multiple aria-label="Choose up to 10 JavaScript animation files"></label>',
+  '<p id="canvas-repair-note" class="field-note">Canvas auto-repair is on. Coordinate arrays and point objects are unpacked automatically.</p>',
+  '<form id="settings"><label>Render location<select id="render-location"><option value="cloud" selected>GitHub Cloud · Actions</option><option value="browser">This device · browser</option></select></label><label>Render engine<select id="engine"><option value="ffmpeg">FFmpeg · verified bitrate</option></select></label><p id="engine-note" class="field-note"></p><div class="field-row"><label>Format<select id="format"><option value="mp4">MP4 · H.264</option><option value="mov">MOV · H.264</option></select></label><label>Frame rate<select id="fps"><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="24">24 FPS</option><option value="25">25 FPS</option><option value="50">50 FPS</option></select></label></div>',
+  '<label>Resolution<select id="resolution"><option value="3840x2160">4K · 3840 × 2160</option><option value="2560x1440">2K · 2560 × 1440</option><option value="1920x1080" selected>FHD · 1920 × 1080</option><option value="1280x720">HD · 1280 × 720</option><option value="native">Original resolution · per file</option><option value="custom">Custom resolution</option></select></label>',
+  '<div id="custom-resolution" class="field-row" hidden><label>Width<input id="custom-width" type="number" min="16" max="4096" step="2" value="1920" aria-label="Custom width in pixels"></label><label>Height<input id="custom-height" type="number" min="16" max="4096" step="2" value="1080" aria-label="Custom height in pixels"></label></div><p class="field-note">Resolution and bitrate are independent.</p>',
+  '<label>Duration mode<select id="duration-mode" aria-describedby="duration-note"><option value="fit">Fit to Duration</option><option value="extend">Extend Timeline</option></select></label>',
+  '<label id="fit-duration">Target duration<select id="duration" aria-describedby="duration-note"><option value="full">Full animation · original duration</option>' + durationOptions + '<option value="2">Quick test · 2 seconds</option><option value="5">Quick test · 5 seconds</option></select></label>',
+  '<label id="extend-duration" hidden>Add time (seconds)<input id="extra-seconds" type="number" min="1" max="' + MAX_EXTRA_SECONDS + '" step="1" value="10" required disabled aria-describedby="duration-note"></label>',
+  '<label id="ending-behavior-field" hidden>Ending<select id="ending-behavior" disabled aria-describedby="duration-note"><option value="smart">Smart Preserve</option><option value="source">Follow original ending</option></select></label>',
+  '<p id="duration-note" class="field-note" aria-live="polite">Full animation uses each file’s original duration.</p>',
+  '<label>Bitrate mode<select id="bitrate-mode">' + bitrateOptions + '</select></label>',
+  '<label>Target bitrate<div class="bitrate-field"><input id="bitrate" type="number" min="40" max="51" step="0.001" value="45.123" required readonly aria-label="Target bitrate in Mbps"><span>Mbps</span><button id="random-bitrate" type="button" title="Pick a new target within the selected range">Randomize</button></div></label>',
+  '<p id="bitrate-mode-note" class="field-note"></p>',
+  '<p id="bitrate-note" class="field-note"></p>',
+  '<label>Save video<select id="save-mode"><option value="download">Download when complete</option><option value="disk">Save directly to file</option></select></label>',
+  '<p id="storage-note" class="field-note"></p><div class="estimate"><span>Estimated file size</span><strong id="estimate">—</strong></div>',
+  '<button id="render" class="primary-button" type="submit" disabled>Render video <span aria-hidden="true">↗</span></button></form>',
+  '<p id="capabilities" class="capabilities">Checking browser support…</p></aside></div>',
+  '<section class="job-panel" id="render-status" aria-live="polite"><div class="job-header"><div><p class="eyebrow">RENDER STATUS</p><h2 id="status">Ready to load an animation</h2></div><button id="cancel" class="secondary-button" disabled>Cancel render</button></div>',
+  '<progress id="progress" aria-label="Render progress" value="0" max="100"></progress><div class="job-stats"><span id="frame-stat">0 frames</span><span id="speed-stat">—</span><span id="eta-stat">—</span></div><p id="encoding-details" class="field-note"></p><p id="repair-details" class="field-note" hidden></p><p id="message" class="job-message">For a quick first test, use 720p, 30 FPS, and a 2-second clip.</p><a id="download" class="download-link" hidden>Download video <span aria-hidden="true">↓</span></a></section>',
+  '<section id="render-queue" class="queue-panel" aria-labelledby="queue-title" hidden><div class="queue-header"><div class="panel-title"><span class="section-number">03</span><h2 id="queue-title">Render queue</h2></div><span id="queue-count" class="step-chip"></span></div><p class="queue-note">Files render one at a time. If an animation fails, the next file starts automatically.</p><ol id="queue-list" class="queue-list"></ol><p id="queue-summary" class="queue-summary" role="status" aria-live="polite"></p></section>',
+  CLOUD_PANEL_HTML,
+  '<section class="ai-panel" aria-labelledby="ai-title"><div class="panel-title"><span class="section-number">04</span><h2 id="ai-title">AI Auto Repair · GPT-5.6 Sol</h2></div><p class="queue-note">Use Auto Repair on a file in the render queue. Repaired code is tested across the full animation before it becomes ready to render.</p><details id="ai-settings"><summary>AI repair connection</summary><div class="ai-fields"><label>AI backend URL<input id="ai-endpoint" type="url" placeholder="https://canvas-ai-repair.example.workers.dev" autocomplete="off"></label><label>Repair access code<input id="ai-token" type="password" placeholder="Your private repair access code" autocomplete="off" spellcheck="false"></label></div><button id="ai-check" class="secondary-button" type="button">Check backend</button><p id="ai-connection" class="field-note" aria-live="polite">Configure your backend to enable AI repair. Keep your OpenAI API key in the backend.</p></details><label class="ai-consent"><input id="ai-consent" type="checkbox">Allow the selected JavaScript file and error details to be sent to OpenAI through my backend for repair.</label><p class="field-note">Up to 250 KB per file and two AI requests per click. API usage is billed separately. The access code stays in this tab; only the backend URL is remembered. Your original file is kept. Review the preview before exporting.</p><p id="ai-status" class="field-note" aria-live="polite">AI repair is ready to configure.</p></section>',
+  '<footer><span>JAVASCRIPT → CANVAS → MP4 / MOV</span><span id="footer-note">Keep this tab open while rendering on this device.</span></footer>',
+  '</main>',
+].join('\n');
+
+const $ = (id) => document.getElementById(id);
+const fileFullscreen = makePreviewFullscreen($('files-viewport'), $('files-fullscreen'));
+const prism = makePrismAnimation(document.querySelector('.prism-art'));
+const state = {
+  source: '', fileName: '', meta: null, preview: null, exporting: null,
+  playing: false, raf: 0, time: 0, origin: 0, originTime: 0,
+  drawing: false, pendingTime: null, previewFrame: null, loading: false, busy: false, cancelRequested: false, fileStream: null,
+  activeSettings: null, lastRenderBitrate: null, jobs: [], currentJob: null, preparing: null, repairing: null,
+  cloudQueueJobId: null, previewJob: null, endingProbe: null,
+};
+const fileResolution = makePreviewResolution($('preview'), () => {
+  if (state.preview && !state.drawing && fileResolution.needsRedraw(state.meta)) void draw(state.time);
+});
+const queue = createRenderQueue($('render-queue'), job => loadPreview(job), repairJob, restoreOriginal);
+let quickPreview;
+const isCloud = () => $('render-location').value === 'cloud';
+const cloudControls = makeCloudControls({
+  onChange: updateControls,
+  onRun: showCloudStatus,
+  onReport: applyCloudReport,
+  onConnect: () => { $('render-location').value = 'cloud'; updateEngineNotes(); },
+});
+
+function makeBridge(onEvent, restricted = false) {
+  const worker = new Worker(new URL('./render-worker.js', import.meta.url), { type: 'module' });
+  const pending = new Map();
+  let nextId = 1;
+  let disposed = false;
+  const failAll = (error) => {
+    for (const item of pending.values()) { clearTimeout(item.timer); item.reject(error); }
+    pending.clear();
+  };
+  worker.onmessage = ({ data }) => {
+    if (data.event) { if (onEvent) onEvent(data); return; }
+    const item = pending.get(data.id);
+    if (!item) { if (data.result && data.result.bitmap) data.result.bitmap.close(); return; }
+    clearTimeout(item.timer);
+    pending.delete(data.id);
+    if (data.ok) item.resolve(data.result);
+    else {
+      const error = new Error(data.error.message);
+      error.name = data.error.name;
+      item.reject(error);
+    }
+  };
+  worker.onerror = (event) => failAll(new Error(event.message || 'The renderer stopped. Reload your animation file and try again.'));
+  return {
+    call(type, payload = {}, transfer = [], timeout = 0) {
+      return new Promise((resolve, reject) => {
+        if (disposed) { reject(new DOMException('Cancelled.', 'AbortError')); return; }
+        const id = nextId++;
+        const timer = timeout ? setTimeout(() => {
+          this.dispose(new Error('The animation is not responding. Check your JavaScript and reload the file.'));
+        }, timeout) : null;
+        pending.set(id, { resolve, reject, timer });
+        try { worker.postMessage({ id, type, payload: type === 'load' && restricted ? { ...payload, restricted: true } : payload }, transfer); }
+        catch (error) { clearTimeout(timer); pending.delete(id); reject(error); }
+      });
+    },
+    dispose(error = new DOMException('Cancelled.', 'AbortError')) {
+      disposed = true;
+      worker.terminate();
+      failAll(error);
+    },
+  };
+}
+
+function setMessage(text, error = false) {
+  $('message').textContent = text;
+  $('message').classList.toggle('error', error);
+}
+
+function repairText(report) {
+  const operations = report.fixes.map(fix => fix.operation + '()').join(', ');
+  return 'Canvas auto-repair applied · ' + report.repairedCalls + ' call' + (report.repairedCalls === 1 ? '' : 's') + ' · ' + operations + '.';
+}
+
+function updateRepairDetails(report) {
+  if (!report) return;
+  $('repair-details').hidden = !report.repairedCalls;
+  $('repair-details').textContent = report.repairedCalls ? repairText(report) : '';
+}
+
+function updateControls() {
+  const rendering = (state.busy && !isCloud() && !state.repairing) || cloudControls.activity === 'in_progress';
+  const queued = !state.repairing && ((state.busy && isCloud()) || cloudControls.running);
+  prism.setState(rendering ? 'rendering' : queued ? 'queued' : 'idle');
+  const blocked = state.busy || state.loading || Boolean(state.endingProbe) || cloudControls.running || cloudControls.connecting;
+  $('file').disabled = blocked;
+  $('upload-zone').classList.toggle('disabled', blocked);
+  for (const element of $('settings').querySelectorAll('input, select, button')) element.disabled = blocked;
+  const extended = $('duration-mode').value === 'extend';
+  $('fit-duration').hidden = extended;
+  $('extend-duration').hidden = !extended;
+  $('ending-behavior-field').hidden = !extended;
+  $('duration').disabled = blocked || extended;
+  $('extra-seconds').disabled = blocked || !extended;
+  $('ending-behavior').disabled = blocked || !extended;
+  $('save-mode').disabled = blocked || isCloud();
+  $('render').disabled = blocked || quickPreview?.active || !state.jobs.length || (!isCloud() && !browserReady) ||
+    (extended && !validExtraSeconds($('extra-seconds').valueAsNumber));
+  $('render').innerHTML = (state.jobs.length > 1 ? 'Render ' + state.jobs.length + ' videos' : 'Render video') + ' <span aria-hidden="true">↗</span>';
+  $('play').disabled = blocked || !state.meta;
+  $('seek').disabled = blocked || !state.meta;
+  $('cancel').disabled = isCloud() && !state.repairing ? !cloudControls.canCancel : !state.busy;
+  $('cancel').textContent = state.repairing ? 'Cancel repair' : isCloud() ? 'Cancel cloud render' : state.jobs.length > 1 ? 'Cancel queue' : 'Cancel render';
+  for (const element of $('ai-settings').querySelectorAll('input, button')) element.disabled = blocked;
+  $('ai-consent').disabled = blocked;
+  queue.setBlocked(blocked);
+  quickPreview?.setBlocked({ editing: state.busy || state.loading, using: blocked });
+}
+
+function durationPreferences() {
+  return $('duration-mode').value === 'extend' ?
+    { durationChoice: 'extend', extraSeconds: $('extra-seconds').valueAsNumber, endingBehavior: $('ending-behavior').value } :
+    { durationChoice: $('duration').value };
+}
+
+function exportPreferences() {
+  const preferences = {
+    format: $('format').value, ...resolutionPreferences(), fps: Number($('fps').value),
+    ...durationPreferences(), engine: $('engine').value, bitrateMode: $('bitrate-mode').value,
+    bitrate: Math.round(Number($('bitrate').value) * 1_000_000), saveMode: $('save-mode').value,
+  };
+  if (preferences.resolution !== 'native') validateDimensions(preferences.width, preferences.height);
+  validateTargetBitrate(preferences.bitrate, preferences.bitrateMode);
+  if (preferences.engine !== 'ffmpeg') throw new Error('Use FFmpeg for verified bitrate.');
+  return preferences;
+}
+
+function resolutionPreferences() {
+  if ($('resolution').value === 'native') return { resolution: 'native' };
+  const dimensions = $('resolution').value === 'custom' ?
+    [Number($('custom-width').value), Number($('custom-height').value)] : $('resolution').value.split('x').map(Number);
+  return { resolution: 'fixed', width: dimensions[0], height: dimensions[1] };
+}
+
+function readAnimationDefaults(preferences) {
+  if (preferences) return animationDefaults(preferences);
+  const dimensions = resolutionPreferences();
+  return animationDefaults({ width: dimensions.width || undefined, height: dimensions.height || undefined,
+    fps: Number($('fps').value) });
+}
+
+function settingsFor(meta, preferences, bitrate = preferences.bitrate) {
+  return {
+    format: preferences.format, ...exportDimensions(preferences, meta), fps: preferences.fps,
+    engine: preferences.engine, bitrateMode: preferences.bitrateMode, bitrate, endingBehavior: preferences.endingBehavior,
+    ...durationSettings(meta.duration, preferences.durationChoice, preferences.fps, preferences.extraSeconds),
+  };
+}
+
+function settings() {
+  return settingsFor(state.meta, exportPreferences());
+}
+
+function sizeText(bytes) {
+  if (bytes >= 1_000_000_000) return (bytes / 1_000_000_000).toFixed(2) + ' GB';
+  return (bytes / 1_000_000).toFixed(1) + ' MB';
+}
+
+function durationText(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '—';
+  if (seconds < 60) return Math.ceil(seconds) + ' sec';
+  return Math.floor(seconds / 60) + ' min ' + Math.ceil(seconds % 60) + ' sec';
+}
+
+function updateEstimate() {
+  if (!state.meta) { $('estimate').textContent = '—'; return; }
+  try { const s = settings(); $('estimate').textContent = '≈ ' + sizeText(s.bitrate * s.duration / 8); }
+  catch { $('estimate').textContent = '—'; }
+}
+
+function randomizeBitrate() {
+  if ($('bitrate-mode').value === 'manual') return Number($('bitrate').value) * 1_000_000;
+  const bitrate = randomBitrate($('bitrate-mode').value, [Number($('bitrate').value) * 1_000_000, state.lastRenderBitrate]);
+  $('bitrate').value = (bitrate / 1_000_000).toFixed(3);
+  updateEstimate();
+  return bitrate;
+}
+
+function updateBitrateMode() {
+  const manual = $('bitrate-mode').value === 'manual';
+  const profile = manual ? null : getBitrateProfile($('bitrate-mode').value);
+  $('engine').value = 'ffmpeg';
+  $('bitrate').readOnly = !manual;
+  $('bitrate').min = manual ? 1 : profile.minMbps;
+  $('bitrate').max = manual ? 200 : profile.maxMbps;
+  $('random-bitrate').hidden = manual;
+  $('bitrate-mode-note').textContent = manual ?
+    'Enter 1–200 Mbps. Every file uses this target; measured video bitrate is checked within ±5%.' :
+    'New random target for each file within ' + profile.minMbps + '–' + profile.maxMbps + ' Mbps. Works with any selected resolution.';
+  if (!manual) randomizeBitrate();
+  updateEngineNotes();
+}
+
+function updateResolutionMode() {
+  const custom = $('resolution').value === 'custom';
+  $('custom-resolution').hidden = !custom;
+  for (const id of ['custom-width', 'custom-height']) $(id).required = custom;
+  updateEstimate();
+}
+
+function clearDownload() {
+  $('download').hidden = true;
+  $('download').removeAttribute('href');
+}
+
+function pause() {
+  state.playing = false;
+  cancelAnimationFrame(state.raf);
+  $('play').textContent = '▶';
+}
+
+function previewTiming() {
+  const { durationChoice, extraSeconds, endingBehavior } = durationPreferences();
+  const choice = durationChoice === 'extend' && !validExtraSeconds(extraSeconds) ? 'full' : durationChoice;
+  const fps = Number($('fps').value);
+  return { fps, endingBehavior, ...durationSettings(state.meta.duration, choice, fps, extraSeconds) };
+}
+
+function updateDurationNote() {
+  const { durationChoice: choice, extraSeconds, endingBehavior } = durationPreferences();
+  if (choice === 'extend') {
+    if (!validExtraSeconds(extraSeconds)) {
+      $('duration-note').textContent = 'Enter 1–' + MAX_EXTRA_SECONDS + ' whole seconds to extend the timeline.';
+    } else if (state.endingProbe) {
+      $('duration-note').textContent = 'Analyzing the ending…';
+    } else if (state.meta) {
+      const timing = previewTiming(), { duration } = timing;
+      const seconds = value => Number(value.toFixed(3)) + ' s';
+      const { loop, region, holdAt } = selectedEnding(state.meta, timing);
+      const ending = loop ? 'End loop' : region?.label ?? (Number.isFinite(holdAt) ? 'Keep composition' : 'Hold last frame');
+      $('duration-note').textContent = seconds(duration - extraSeconds) + ' + ' + seconds(extraSeconds) +
+        ' = ' + seconds(duration) + ' · ' + ending +
+        (Number.isFinite(holdAt) ? ' · Hold from ' + seconds(holdAt) : '') +
+        (state.meta.reader.defaulted.includes('duration') ? ' · Source defaults to 20 s' : '') +
+        (state.jobs.length > 1 ? ' · Time added to each file' : '');
+    } else {
+      $('duration-note').textContent = 'Adds ' + extraSeconds +
+        (endingBehavior === 'smart' ?
+          ' seconds. Smart Preserve looks for repeating motion and a stable composition before the fade.' :
+          ' seconds at the original speed. Uses the source ending.');
+    }
+  } else if (choice === 'full') {
+    $('duration-note').textContent = state.meta?.reader?.defaulted?.includes('duration') ?
+      'No source duration found. Full animation uses ' + state.meta.duration + ' seconds. Choose a duration to set the clip length.' :
+      'Full animation uses each file’s original duration. Files without duration use 20 seconds.';
+  } else if (FIXED_DURATIONS.includes(Number(choice))) {
+    const speed = state.meta ? ' · ' + (state.meta.duration / Number(choice)).toFixed(2) + '× speed' : '';
+    $('duration-note').textContent = 'Full animation fitted to ' + choice + ' seconds' + speed + '. Preview uses the same timing. Applies to every file in the queue.';
+  } else {
+    $('duration-note').textContent = 'Export only the first ' + choice + ' seconds, up to the file’s original duration. Preview uses the same timing.';
+  }
+}
+
+async function analyzePreviewEnding() {
+  const { meta, preview } = state;
+  if (!meta || !preview || state.endingProbe || !shouldAnalyzeEnding(meta, previewTiming())) return;
+  const probe = makeBridge();
+  state.endingProbe = probe;
+  updateControls(); updateDurationNote();
+  try {
+    const plan = await probeEnding(probe, { source: state.source, fileName: state.fileName, metadataDefaults: meta }, meta);
+    if (state.preview !== preview || state.meta !== meta) return;
+    if (plan?.endRegion) await preview.call('set-ending', { plan }, [], 6000);
+    meta.smartEnding = plan;
+  } catch {
+    if (state.meta === meta) meta.smartEnding = null;
+  } finally {
+    if (state.endingProbe === probe) state.endingProbe = null;
+    updateControls(); updateDurationNote();
+  }
+}
+
+async function updatePreviewTiming() {
+  updateDurationNote();
+  updateEstimate();
+  if (!state.meta || !state.preview) return;
+  pause();
+  const preview = state.preview;
+  $('seek').max = previewTiming().duration;
+  await analyzePreviewEnding();
+  if (state.preview === preview) void draw(0);
+}
+
+async function draw(time) {
+  if (!state.preview || !state.meta) return;
+  if (state.drawing) { state.pendingTime = time; return; }
+  const dimensions = fileResolution.size(state.meta);
+  if (!dimensions) return false;
+  const bridge = state.preview;
+  state.drawing = true;
+  const { width, height } = dimensions;
+  let drawn = false;
+  try {
+    const timing = previewTiming();
+    time = Math.max(0, Math.min(timing.duration, time));
+    const frame = animationFrame(time, state.meta, timing);
+    const sourceTime = frame.time;
+    const previous = state.previewFrame;
+    const { loop, region } = selectedEnding(state.meta, timing);
+    const reuse = timing.durationMode === 'extend' && !loop && !region && previous?.bridge === bridge &&
+      previous.width === width && previous.height === height && previous.sourceTime === sourceTime;
+    if (!reuse) {
+      const { bitmap, canvasRepair } = await bridge.call('draw', { width, height, ...frame }, [], 10000);
+      if (bridge !== state.preview) { bitmap.close(); return; }
+      const canvas = $('preview');
+      try {
+        if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+        canvas.getContext('2d').drawImage(bitmap, 0, 0);
+      } finally { bitmap.close(); }
+      state.previewFrame = { bridge, width, height, sourceTime };
+      $('canvas-repair-note').textContent = canvasRepair?.repairedCalls ? repairText(canvasRepair) :
+        'Canvas auto-repair is on. Coordinate arrays and point objects are unpacked automatically.';
+    }
+    state.time = time;
+    $('seek').value = time;
+    $('time').textContent = time.toFixed(2) + ' / ' + timing.duration.toFixed(2) + ' s';
+    drawn = true;
+    return true;
+  } catch (error) {
+    if (bridge === state.preview && error.name !== 'AbortError') {
+      pause();
+      setMessage(error.message, true);
+    }
+    return false;
+  } finally {
+    if (bridge === state.preview) {
+      state.drawing = false;
+      if (state.pendingTime !== null) {
+        const nextTime = state.pendingTime;
+        state.pendingTime = null;
+        void draw(nextTime);
+      } else if (drawn && fileResolution.needsRedraw(state.meta)) {
+        // A resize may finish while the worker is drawing. Keep the latest
+        // frame time and redraw it once at the new resolution, even if paused.
+        void draw(state.time);
+      }
+    }
+  }
+}
+
+function tick(now) {
+  if (!state.playing || !state.meta) return;
+  const duration = previewTiming().duration;
+  const time = Math.min(duration, state.originTime + (now - state.origin) / 1000);
+  if (!state.drawing) void draw(time);
+  if (time >= duration) { pause(); void draw(duration); return; }
+  state.raf = requestAnimationFrame(tick);
+}
+
+const browserReady = isSecureContext && 'OffscreenCanvas' in globalThis &&
+  'Worker' in globalThis && 'WebAssembly' in globalThis;
+const diskAvailable = 'showSaveFilePicker' in globalThis;
+const directoryAvailable = 'showDirectoryPicker' in globalThis;
+$('save-mode').querySelector('[value="disk"]').disabled = !diskAvailable;
+$('save-mode').value = 'download';
+$('capabilities').textContent = browserReady ?
+  'Browser ready. FFmpeg runs on this device’s CPU.' :
+  'Export requires OffscreenCanvas, Worker, WebAssembly, and HTTPS or localhost.';
+$('capabilities').classList.toggle('unsupported', !browserReady);
+
+quickPreview = makeQuickPreview({
+  makeBridge: () => makeBridge(undefined, true),
+  readDefaults: readAnimationDefaults,
+  onModeChange: active => {
+    if (active) void fileFullscreen.exit();
+    pause(); $('source-badge').hidden = active;
+    document.querySelector('.preview-panel').classList.toggle('quick-mode', active); updateControls();
+    if (!active) refreshAnimationDefaults();
+  },
+  onUse: source => selectFiles([new File([source], 'quick-preview.js', { type: 'text/javascript' })]),
+});
+
+async function jobSource(job) {
+  if (job.file.size > 5_000_000) throw new Error(job.file.name + ' · Choose a JavaScript file smaller than 5 MB.');
+  if (!job.file.name.toLowerCase().endsWith('.js')) throw new Error(job.file.name + ' · Choose a file with a .js extension.');
+  if (job.source === null) job.source = await job.file.text();
+  return job.source;
+}
+
+function aiConnection() {
+  const endpoint = repairEndpoint($('ai-endpoint').value);
+  const token = $('ai-token').value;
+  if (token.length < 24) throw new Error('Enter your repair access code (at least 24 characters) in AI repair connection.');
+  return { endpoint, token };
+}
+
+function resetJobOutput(job) {
+  if (job.downloadUrl) URL.revokeObjectURL(job.downloadUrl);
+  job.downloadUrl = null;
+  job.result = null;
+  job.outputName = '';
+  job.status = 'pending';
+  clearDownload();
+}
+
+async function restoreOriginal(job) {
+  if (state.busy || state.loading || !job.repaired) return;
+  job.source = job.originalSource;
+  job.meta = null;
+  job.repaired = false;
+  if (job.repairedUrl) URL.revokeObjectURL(job.repairedUrl);
+  job.repairedUrl = null;
+  job.repairMessage = 'Original JavaScript restored.';
+  job.detail = 'Original source restored. Ready to render.';
+  resetJobOutput(job);
+  queue.update(job);
+  await loadPreview(job);
+}
+
+async function repairJob(job) {
+  if (state.busy || state.loading || !browserReady) return;
+  let connection, source, selected;
+  try {
+    connection = aiConnection();
+    if (!$('ai-consent').checked) throw new Error('Allow sending the selected file to OpenAI by checking the consent box in AI Auto Repair.');
+    source = await jobSource(job);
+    if (new TextEncoder().encode(source).length > MAX_AI_SOURCE_BYTES) throw new Error('AI repair supports files up to 250 KB. This file can still be rendered normally.');
+    const preferences = exportPreferences();
+    selected = { width: preferences.width, height: preferences.height, fps: preferences.fps };
+  } catch (error) {
+    $('ai-settings').open = true;
+    $('ai-status').textContent = error.message;
+    job.repairMessage = error.message;
+    queue.update(job);
+    return;
+  }
+  pause();
+  if (state.preview) state.preview.dispose();
+  state.preview = null;
+  state.drawing = false;
+  state.pendingTime = null;
+  const controller = new AbortController();
+  state.repairing = controller;
+  state.busy = true;
+  state.cancelRequested = false;
+  updateControls();
+  let committed = false;
+  const stage = text => {
+    job.repairMessage = text;
+    $('ai-status').textContent = job.file.name + ' · ' + text;
+    $('status').textContent = 'AI Auto Repair · ' + text;
+    queue.update(job);
+  };
+  const validate = (candidate, expectedMeta) => validateAnimation(candidate, job.file.name, selected, () => makeBridge(), {
+    signal: controller.signal, expectedMeta,
+    onProgress: ({ frame, total }) => {
+      $('progress').value = frame / total * 100;
+      $('frame-stat').textContent = frame + ' / ' + total + ' frames checked';
+    },
+  });
+  try {
+    $('progress').value = 0;
+    let diagnostic, expectedMeta = job.meta;
+    stage('Checking the full animation…');
+    try {
+      await validate(source);
+      stage('No runtime error found. Original source kept.');
+      return;
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+      if (error.animationMeta) expectedMeta = error.animationMeta;
+      diagnostic = error.message;
+      if (diagnostic.includes('30,000 frames') || diagnostic.includes('without imports or dynamic code')) throw error;
+    }
+    let candidate = source;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      if (controller.signal.aborted) throw new DOMException('Repair cancelled.', 'AbortError');
+      stage('Requesting GPT-5.6 Sol · attempt ' + attempt + ' / 2…');
+      const result = await callRepairBackend(connection.endpoint, connection.token, '/repair', {
+        source: candidate, fileName: job.file.name, error: diagnostic.slice(0, 4000), metadata: expectedMeta,
+      }, controller.signal);
+      if (!Array.isArray(result.edits) || !result.edits.length) throw new Error(result.summary || 'AI could not establish a repair.');
+      candidate = applyRepairEdits(candidate, result.edits);
+      stage('Validating the repaired animation…');
+      try {
+        const verified = await validate(candidate, expectedMeta);
+        if (controller.signal.aborted) throw new DOMException('Repair cancelled.', 'AbortError');
+        if (job.originalSource === null) job.originalSource = source;
+        if (job.repairedUrl) URL.revokeObjectURL(job.repairedUrl);
+        job.source = candidate;
+        job.meta = verified.meta;
+        job.repaired = true;
+        job.repairedUrl = URL.createObjectURL(new Blob([candidate], { type: 'text/javascript' }));
+        resetJobOutput(job);
+        job.detail = 'Repaired source ready. Preview the animation, then click Render to export.';
+        stage('Repair ready · ' + verified.frames + ' frames checked at ' + selected.width + ' × ' + selected.height + ', ' + selected.fps + ' FPS. ' + String(result.summary).slice(0, 2000));
+        committed = true;
+        break;
+      } catch (error) {
+        if (controller.signal.aborted || error.message.includes('changed animation metadata') || error.message.includes('without imports or dynamic code')) throw error;
+        diagnostic = error.message;
+        if (attempt === 2) throw new Error('Repair did not pass full animation validation. ' + diagnostic);
+      }
+    }
+  } catch (error) {
+    stage(controller.signal.aborted ? 'Repair cancelled. Original source kept.' : 'Repair failed · ' + error.message + ' Original source kept.');
+  } finally {
+    state.repairing = null;
+    state.busy = false;
+    state.cancelRequested = false;
+    updateControls();
+    // Restore a usable preview without modifying any original file on disk.
+    await loadPreview(job);
+    if (committed) $('status').textContent = 'AI repair ready to render';
+    $('ai-status').textContent = job.file.name + ' · ' + job.repairMessage;
+  }
+}
+
+try { $('ai-endpoint').value = localStorage.getItem('canvas-ai-backend') || ''; } catch { /* Storage is optional. */ }
+$('ai-endpoint').addEventListener('change', () => {
+  try { localStorage.setItem('canvas-ai-backend', $('ai-endpoint').value.trim()); } catch { /* Storage is optional. */ }
+});
+$('ai-check').addEventListener('click', async () => {
+  if (state.busy || state.loading) return;
+  try {
+    const connection = aiConnection();
+    $('ai-check').disabled = true;
+    $('ai-connection').textContent = 'Checking backend configuration…';
+    const result = await callRepairBackend(connection.endpoint, connection.token, '/health');
+    if (!result.ok) throw new Error('The backend is not ready.');
+    $('ai-connection').textContent = 'Backend connected · GPT-5.6 Sol configured. API access and billing are checked on the first repair.';
+  } catch (error) { $('ai-connection').textContent = error.message; }
+  finally { $('ai-check').disabled = state.busy || state.loading; }
+});
+
+async function loadPreview(job, initial = false) {
+  if (state.busy || state.loading || state.endingProbe) return;
+  state.loading = true;
+  state.previewJob = job;
+  quickPreview.showFiles();
+  pause();
+  updateRepairDetails({ repairedCalls: 0 });
+  $('canvas-repair-note').textContent = 'Canvas auto-repair is on. Coordinate arrays and point objects are unpacked automatically.';
+  if (state.preview) state.preview.dispose();
+  state.preview = null;
+  state.meta = null;
+  state.previewFrame = null;
+  $('source-badge').textContent = 'Loading…';
+  $('source-badge').classList.remove('loaded');
+  state.drawing = false;
+  state.pendingTime = null;
+  updateControls();
+  $('status').textContent = 'Loading animation…';
+  $('progress').value = 0;
+  try {
+    if (!('OffscreenCanvas' in globalThis)) throw new Error('This browser does not support OffscreenCanvas.');
+    state.source = await jobSource(job);
+    state.fileName = job.file.name;
+    state.preview = makeBridge(undefined, job.repaired);
+    state.meta = await state.preview.call('load', { source: state.source, fileName: state.fileName,
+      metadataDefaults: readAnimationDefaults() }, [], 15000);
+    job.meta = state.meta;
+    $('animation-title').textContent = state.meta.title;
+    $('metadata').textContent = state.meta.width + ' × ' + state.meta.height + ' · ' +
+      state.meta.fps + ' FPS · ' + state.meta.duration + ' seconds' +
+      (state.meta.reader.defaulted.length ? ' · Missing metadata uses Export settings' : '');
+    $('source-badge').textContent = state.jobs.length > 1 ? 'Preview · ' + job.file.name : 'File loaded';
+    $('source-badge').classList.add('loaded');
+    $('empty-state').hidden = true;
+    if (initial) $('fps').value = ['24', '25', '30', '50', '60'].includes(String(state.meta.fps)) ?
+      String(state.meta.fps) : '30';
+    await analyzePreviewEnding();
+    $('seek').max = previewTiming().duration;
+    updateDurationNote();
+    $('stage').style.aspectRatio = state.meta.width + ' / ' + state.meta.height;
+    $('status').textContent = state.jobs.length > 1 ? state.jobs.length + ' files ready to render' : 'Animation ready to export';
+    setMessage(state.jobs.length > 1 ? 'Fit to Duration sets the same target length for the queue. Extend Timeline adds time to each file’s own duration. Choose Render ' + state.jobs.length + ' videos to start the queue.' : 'Preview resolution adapts to your display, up to 4K, and follows your selected duration. For a quick test, choose Fit to Duration, 720p, 30 FPS, and 2 seconds.');
+    updateEngineNotes();
+    const drawn = await draw(Math.min(2, previewTiming().duration));
+    if (!drawn && job.status === 'pending') {
+      job.detail = 'Preview error · ' + $('message').textContent + ' The queue will attempt this file and continue if it fails.';
+      queue.update(job);
+    }
+    updateEstimate();
+  } catch (error) {
+    if (state.preview) state.preview.dispose();
+    state.preview = null;
+    state.meta = null;
+    $('animation-title').textContent = job.file.name;
+    $('metadata').textContent = 'Preview unavailable.';
+    $('status').textContent = 'Unable to load the file';
+    $('source-badge').textContent = 'File error';
+    setMessage(error.message, true);
+    $('empty-state').hidden = false;
+    if (job.status === 'pending') {
+      job.detail = 'Preview unavailable · ' + error.message;
+      queue.update(job);
+    }
+  } finally { state.loading = false; updateControls(); }
+}
+
+async function selectFiles(files) {
+  if (state.busy || state.loading || state.endingProbe || cloudControls.running || cloudControls.connecting) return;
+  files = Array.from(files);
+  if (!files.length) return;
+  if (files.length > MAX_QUEUE_FILES) {
+    setMessage('Select up to ' + MAX_QUEUE_FILES + ' JavaScript files. You selected ' + files.length + '. The current queue has been kept.', true);
+    return;
+  }
+  const invalid = files.find(file => !file.name.toLowerCase().endsWith('.js') || file.size > 5_000_000);
+  if (invalid) { setMessage(invalid.name + ' · Choose .js files up to 5 MB each. The current queue has been kept.', true); return; }
+  clearDownload();
+  state.cloudQueueJobId = null;
+  state.jobs = queue.replace(files);
+  $('file-label').textContent = files.length === 1 ? files[0].name : files.length + ' JavaScript files selected';
+  updateEngineNotes();
+  $('frame-stat').textContent = '0 frames';
+  $('speed-stat').textContent = '—';
+  $('eta-stat').textContent = '—';
+  $('encoding-details').textContent = '';
+  await loadPreview(state.jobs[0], true);
+}
+$('file').addEventListener('change', event => {
+  const files = Array.from(event.target.files);
+  event.target.value = '';
+  void selectFiles(files);
+});
+let dragDepth = 0;
+const fileDrag = event => Array.from(event.dataTransfer?.types || []).includes('Files');
+document.addEventListener('dragenter', event => {
+  if (!fileDrag(event)) return;
+  event.preventDefault(); dragDepth++;
+  if (!$('file').disabled) $('upload-zone').classList.add('drop-active');
+});
+document.addEventListener('dragover', event => {
+  if (!fileDrag(event)) return;
+  event.preventDefault(); event.dataTransfer.dropEffect = $('file').disabled ? 'none' : 'copy';
+});
+document.addEventListener('dragleave', () => {
+  if (--dragDepth <= 0) { dragDepth = 0; $('upload-zone').classList.remove('drop-active'); }
+});
+document.addEventListener('drop', event => {
+  if (!fileDrag(event)) return;
+  event.preventDefault(); dragDepth = 0; $('upload-zone').classList.remove('drop-active');
+  void selectFiles(event.dataTransfer.files);
+});
+
+$('play').addEventListener('click', () => {
+  if (state.playing) { pause(); return; }
+  if (state.time >= previewTiming().duration) state.time = 0;
+  state.originTime = state.time;
+  state.origin = performance.now();
+  state.playing = true;
+  $('play').textContent = 'Ⅱ';
+  state.raf = requestAnimationFrame(tick);
+});
+$('seek').addEventListener('input', () => { pause(); void draw(Number($('seek').value)); });
+function updateEngineNotes() {
+  const cloud = isCloud();
+  const batch = state.jobs.length > 1;
+  const diskOption = $('save-mode').querySelector('[value="disk"]');
+  diskOption.textContent = batch ? 'Save all videos to a folder' : 'Choose a save location';
+  diskOption.disabled = batch ? !directoryAvailable : !diskAvailable;
+  if (cloud) $('save-mode').value = 'download';
+  if (diskOption.disabled && $('save-mode').value === 'disk') $('save-mode').value = 'download';
+  $('save-mode').querySelector('[value="download"]').textContent = cloud ? 'GitHub Artifacts · 3 days' : batch ? 'Download each completed video' : 'Download when complete';
+  $('engine').querySelector('[value="ffmpeg"]').textContent = cloud ? 'FFmpeg native · verified bitrate' : 'FFmpeg · verified bitrate';
+  $('engine-note').textContent = cloud ? 'Click Render to upload your animations and start GitHub Actions automatically. Cloud status and completed videos appear below.' :
+    'The video bitrate is verified against your chosen bitrate setting before saving.';
+  $('bitrate-note').textContent = 'H.264 filler maintains the target bitrate when needed. It increases file size without adding visual detail.';
+  $('storage-note').textContent = cloud ? 'Results stay in GitHub Artifacts for 3 days. Download them after completion. Cloud disk limits: 2 GB per video and 8 GB per job, subject to available runner disk space.' : batch ?
+    'Download each result from its row, or choose one folder when supported. Encoding uses memory; each output is limited to approximately 500 MB.' :
+    'Encoding uses memory even when choosing a save location. Output is limited to approximately 500 MB.';
+  $('cloud-panel').hidden = !cloud;
+  $('footer-note').textContent = cloud ? 'After GitHub accepts the run, rendering continues with your browser closed.' : 'Keep this tab open while rendering on this device.';
+  document.querySelector('.local-badge').innerHTML = '<i></i>' + (cloud ? 'Render in GitHub Actions' : 'Runs on your device');
+  $('capabilities').textContent = cloud ? 'Cloud render uses the standard GitHub runner’s CPU. Browser support only affects the local preview.' : browserReady ? 'Browser ready. FFmpeg runs on this device’s CPU.' : 'Export requires OffscreenCanvas, Worker, WebAssembly, and HTTPS or localhost.';
+  $('capabilities').classList.toggle('unsupported', !cloud && !browserReady);
+  updateEstimate();
+  updateControls();
+}
+$('settings').addEventListener('input', updateEstimate);
+$('engine').addEventListener('change', updateEngineNotes);
+$('bitrate-mode').addEventListener('change', () => updateBitrateMode());
+$('resolution').addEventListener('change', updateResolutionMode);
+for (const [id, event] of [['duration-mode', 'change'], ['extra-seconds', 'input'], ['ending-behavior', 'change']]) {
+  $(id).addEventListener(event, () => { updateControls(); updatePreviewTiming(); });
+}
+$('duration').addEventListener('change', updatePreviewTiming);
+$('fps').addEventListener('change', updatePreviewTiming);
+function refreshAnimationDefaults() {
+  if (state.busy || state.loading || cloudControls.running || cloudControls.connecting) return;
+  for (const job of state.jobs) if (job.meta?.reader?.defaulted?.length) job.meta = null;
+  if (!quickPreview.active && state.previewJob && state.meta?.reader?.defaulted?.length) {
+    void loadPreview(state.previewJob);
+  }
+}
+for (const id of ['resolution', 'custom-width', 'custom-height', 'fps']) {
+  $(id).addEventListener('change', () => { quickPreview.settingsChanged(); refreshAnimationDefaults(); });
+}
+$('random-bitrate').addEventListener('click', randomizeBitrate);
+$('render-location').addEventListener('change', updateEngineNotes);
+
+function showCloudStatus(record, submitted = false) {
+  if (submitted) state.cloudQueueJobId = record.id;
+  if (!isCloud() || state.loading || (state.busy && !submitted && state.cloudQueueJobId !== record.id)) return;
+  // Refreshing an older cloud job must not overwrite the selected queue.
+  if (state.cloudQueueJobId && state.cloudQueueJobId !== record.id) return;
+  const labels = { uploading: 'Uploading animations…', starting: 'Starting cloud render…', queued: 'Queued in GitHub',
+    locating: 'Locating your cloud render…', uncertain: 'Checking cloud render status…',
+    in_progress: record.cancelRequested ? 'Cancellation requested' : record.phase || 'Rendering in GitHub',
+    completed: record.conclusion === 'cancelled' ? 'Cloud render cancelled' : 'Cloud render finished',
+    upload_failed: 'Unable to start cloud render', unconfirmed: 'Cloud run not confirmed' };
+  $('status').textContent = labels[record.status] || 'Waiting in GitHub';
+  $('speed-stat').textContent = 'GitHub Actions · native FFmpeg';
+  $('eta-stat').textContent = record.status === 'completed' ? 'Results below' : 'Time varies by animation';
+  if (record.status === 'completed') {
+    $('progress').value = 100;
+    const completed = (record.resultFiles || []).filter(file => file.status === 'completed').length;
+    $('frame-stat').textContent = record.resultFiles?.length ? completed + ' / ' + record.fileNames.length + ' videos completed' : 'See cloud results below';
+    setMessage(record.error || (record.conclusion === 'cancelled' ? 'The cloud run was cancelled. Completed outputs, if any, remain available below.' : 'Download completed videos from Recent cloud jobs below. Video downloads are available for 3 days.'), Boolean(record.error));
+    if (record.conclusion === 'cancelled' && state.cloudQueueJobId === record.id) {
+      for (const job of state.jobs) if (job.status === 'pending' || job.status === 'rendering') {
+        job.status = 'cancelled'; job.detail = 'Cloud run cancelled before this file was confirmed complete.'; queue.update(job);
+      }
+    }
+  } else {
+    if (record.status === 'upload_failed' || record.status === 'unconfirmed') $('progress').value = 0;
+    else $('progress').removeAttribute('value');
+    $('frame-stat').textContent = record.fileNames.length + ' animation' + (record.fileNames.length > 1 ? 's' : '') + ' in cloud batch';
+    setMessage(record.error || (record.accepted ? 'GitHub accepted your render. You can close this browser or switch off your laptop. Reopen this website to check results.' : 'Keep this tab open until GitHub confirms the render.'), record.status === 'upload_failed');
+  }
+}
+
+function applyCloudReport(report, record) {
+  if (state.cloudQueueJobId !== record.id || state.jobs.length !== report.files.length) return;
+  report.files.forEach((file, index) => {
+    const job = state.jobs[index];
+    if (file.fileName !== job.file.name) return;
+    job.status = file.status;
+    job.detail = file.status === 'completed' ? 'Verified · ' + (file.videoBitrate / 1e6).toFixed(3) + ' Mbps · ' + file.frames + ' frames · ' + file.duration + ' s. Download from Recent cloud jobs.' : file.error || 'Cloud render failed.';
+    queue.update(job);
+  });
+}
+
+async function startCloudRender(preferences) {
+  if (!cloudControls.connected) {
+    cloudControls.openConnection();
+    setMessage('Connect GitHub once below, then click Render.');
+    return;
+  }
+  state.cloudQueueJobId = null;
+  state.busy = true;
+  state.cancelRequested = false;
+  updateControls();
+  $('status').textContent = 'Preparing cloud job…';
+  try {
+    const sources = [];
+    for (const job of state.jobs) {
+      checkCancelled();
+      sources.push({ fileName: job.file.name, source: await jobSource(job) });
+    }
+    checkCancelled();
+    clearDownload(); queue.reset();
+    await cloudControls.submit(preferences, sources);
+  } catch (error) {
+    $('status').textContent = 'Unable to start cloud render';
+    setMessage(error.message, true);
+  } finally { state.busy = false; state.cancelRequested = false; updateControls(); }
+}
+
+function renderStatus(text, job = state.currentJob) {
+  $('status').textContent = job && state.jobs.length > 1 ?
+    (job.index + 1) + ' / ' + state.jobs.length + ' · ' + text : text;
+}
+
+function onProgress(data, job) {
+  if (!state.busy || state.currentJob !== job || state.cancelRequested) return;
+  updateRepairDetails(data.canvasRepair);
+  if (Number.isFinite(data.targetBitrate) && state.activeSettings) {
+    $('bitrate').value = (data.targetBitrate / 1_000_000).toFixed(3);
+    $('encoding-details').textContent = encodingDetails(state.activeSettings, data.targetBitrate);
+  }
+  if (data.event === 'phase') {
+    const stages = { loading: 'Loading FFmpeg…', frames: 'Preparing animation frames…',
+      encoding: 'Encoding video with FFmpeg…', checking: 'Checking the video…' };
+    const stage = stages[data.phase] || 'Rendering…';
+    renderStatus(stage, job);
+    job.detail = stage;
+    queue.update(job);
+    if (data.phase === 'encoding') $('progress').value = 35;
+    if (data.phase === 'checking') $('progress').value = 98;
+    setMessage(data.message);
+    return;
+  }
+  if (data.event === 'finalizing') {
+    renderStatus('Finalizing the video…', job);
+    $('progress').value = 99;
+    return;
+  }
+  const rate = data.elapsed > 0 ? data.frame / data.elapsed : 0;
+  $('progress').value = Math.min(99, data.progress ?? 99 * data.frame / data.total);
+  $('frame-stat').textContent = data.frame + ' / ' + data.total + ' frames';
+  $('speed-stat').textContent = (data.phase === 'frames' ? 'Frames: ' : 'Encoding: ') + rate.toFixed(1) + ' frames/sec';
+  $('eta-stat').textContent = (data.phase ? 'Stage remaining ≈ ' : 'Remaining ≈ ') + durationText(rate > 0 ? (data.total - data.frame) / rate : Infinity);
+}
+
+function encodingDetails(s, target = s.bitrate) {
+  const dimensions = s.resolution === 'native' ? 'original size per file' : s.width + ' × ' + s.height;
+  return 'FFmpeg / x264 · ' + bitrateRangeText(s.bitrateMode, target) +
+    ' · target ' + (target / 1_000_000).toFixed(3) + ' Mbps · ' + dimensions + ' · ' + s.fps + ' FPS';
+}
+
+function checkCancelled() {
+  if (state.cancelRequested) throw new DOMException('Render cancelled.', 'AbortError');
+}
+
+async function prepareJob(job, preferences) {
+  const source = await jobSource(job);
+  checkCancelled();
+  if (!job.meta || job.meta.reader?.defaulted?.length) {
+    const bridge = makeBridge(undefined, job.repaired);
+    state.preparing = bridge;
+    try { job.meta = await bridge.call('load', { source, fileName: job.file.name,
+      metadataDefaults: readAnimationDefaults(preferences) }, [], 15000); }
+    finally {
+      bridge.dispose();
+      if (state.preparing === bridge) state.preparing = null;
+    }
+  }
+  checkCancelled();
+  return source;
+}
+
+let createdOutput = null;
+async function abortSave() {
+  const stream = state.fileStream;
+  state.fileStream = null;
+  if (stream) { try { await stream.abort(); } catch { /* Already closed or aborted. */ } }
+  const output = createdOutput;
+  createdOutput = null;
+  if (output) { try { await output.directory.removeEntry(output.name); } catch { /* No incomplete file remains. */ } }
+}
+
+async function folderOutput(directory, name, usedNames) {
+  // Only create a file after video verification. Existing files are never replaced.
+  while (true) {
+    checkCancelled();
+    const candidate = uniqueOutputName(name, usedNames);
+    try { await directory.getFileHandle(candidate); }
+    catch (error) {
+      if (error.name === 'TypeMismatchError') continue;
+      if (error.name !== 'NotFoundError') throw error;
+      checkCancelled();
+      const handle = await directory.getFileHandle(candidate, { create: true });
+      createdOutput = { directory, name: candidate };
+      checkCancelled();
+      return { handle, name: candidate };
+    }
+  }
+}
+
+async function renderJob(job, preferences, bitrate, directory, diskNames) {
+  state.currentJob = job;
+  job.status = 'rendering';
+  job.detail = 'Loading animation…';
+  queue.update(job);
+  $('progress').value = 0;
+  $('frame-stat').textContent = '0 frames';
+  $('speed-stat').textContent = '—';
+  $('eta-stat').textContent = '—';
+  updateRepairDetails({ repairedCalls: 0 });
+  $('bitrate').value = (bitrate / 1_000_000).toFixed(3);
+  renderStatus('Loading animation…', job);
+  try {
+    const source = await prepareJob(job, preferences);
+    const s = settingsFor(job.meta, preferences, bitrate);
+    state.activeSettings = s;
+    state.lastRenderBitrate = bitrate;
+    $('encoding-details').textContent = encodingDetails(s);
+    if (s.bitrate * s.duration / 8 > 500_000_000) {
+      throw new Error('The estimated FFmpeg output exceeds 500 MB. Reduce the duration or bitrate.');
+    }
+    checkCancelled();
+    const exporter = makeFfmpegBridge(() => makeBridge(undefined, job.repaired), data => {
+      if (state.exporting === exporter) onProgress(data, job);
+    });
+    state.exporting = exporter;
+    renderStatus('Rendering ' + s.format.toUpperCase() + '…', job);
+    setMessage(job.file.name + ' · ' + s.width + ' × ' + s.height + ' · ' + s.fps + ' FPS · ' +
+      s.duration + ' seconds. Rendering runs on this device.');
+    const result = await exporter.call('export', { source, fileName: job.file.name, settings: s,
+      metadataDefaults: job.meta });
+    checkCancelled();
+    if (result.engine !== 'ffmpeg' || !result.bitrateVerified || !verifiedBitrate(result.videoBitrate, s.bitrateMode, result.targetBitrate)) {
+      throw new Error('The video bitrate did not pass the selected bitrate setting. No output file was saved.');
+    }
+    $('bitrate').value = (result.targetBitrate / 1_000_000).toFixed(3);
+    state.lastRenderBitrate = result.targetBitrate;
+    $('encoding-details').textContent = encodingDetails(s, result.targetBitrate);
+    if (directory) {
+      const output = await folderOutput(directory, job.outputName, diskNames);
+      job.outputName = output.name;
+      state.fileStream = await output.handle.createWritable();
+      checkCancelled();
+    }
+    if (state.fileStream) {
+      renderStatus('Saving the video…', job);
+      await state.fileStream.write(new Uint8Array(result.buffer));
+      checkCancelled();
+      await state.fileStream.close();
+      state.fileStream = null;
+      createdOutput = null;
+      result.savedToDisk = true;
+    } else {
+      job.downloadUrl = URL.createObjectURL(new Blob([result.buffer], { type: result.mime }));
+    }
+    updateRepairDetails(result.canvasRepair);
+    const bitrateText = 'video bitrate ≈ ' + (result.videoBitrate / 1_000_000).toFixed(3) + ' Mbps';
+    job.status = 'completed';
+    job.detail = sizeText(result.bytes) + ' · ' + result.duration + ' s · ' + result.frames + ' frames · ' + bitrateText +
+      ' · verified ' + bitrateRangeText(s.bitrateMode, result.targetBitrate) + ' · target ' + (result.targetBitrate / 1_000_000).toFixed(3) + ' Mbps' +
+      (result.savedToDisk ? ' · Saved as ' + job.outputName : '');
+    // Keep output statistics and a Blob URL, without retaining a second copy of the video buffer.
+    job.result = { bytes: result.bytes, duration: result.duration, frames: result.frames,
+      videoBitrate: result.videoBitrate, targetBitrate: result.targetBitrate, savedToDisk: result.savedToDisk };
+    queue.update(job);
+    $('progress').value = 100;
+    renderStatus('Video complete', job);
+    $('frame-stat').textContent = result.frames + ' frames · ' + result.duration + ' seconds';
+    $('speed-stat').textContent = 'Completed in ' + durationText(result.elapsed);
+    $('eta-stat').textContent = sizeText(result.bytes);
+    setMessage(job.outputName + ' · ' + bitrateText + '. Verified: ' + bitrateRangeText(s.bitrateMode, result.targetBitrate) +
+      '. ' + (result.savedToDisk ? 'Saved to your chosen location.' : 'Download your video below.'));
+    if (state.jobs.length === 1 && job.downloadUrl) {
+      $('download').href = job.downloadUrl;
+      $('download').download = job.outputName;
+      $('download').hidden = false;
+    }
+  } catch (error) {
+    await abortSave();
+    if (state.cancelRequested) {
+      job.status = 'cancelled';
+      job.detail = 'Render cancelled. No partial video is available.';
+    } else {
+      job.status = 'failed';
+      job.detail = error.message || String(error);
+    }
+    queue.update(job);
+    if (state.jobs.length === 1) {
+      $('status').textContent = state.cancelRequested ? 'Render cancelled' : 'Export failed';
+      setMessage(state.cancelRequested ? 'Your settings are ready. You can try again.' : job.detail, !state.cancelRequested);
+    }
+  } finally {
+    if (state.exporting) state.exporting.dispose();
+    state.exporting = null;
+    state.activeSettings = null;
+    state.currentJob = null;
+  }
+}
+
+$('settings').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (quickPreview.active || !state.jobs.length || state.busy || state.loading || cloudControls.running || cloudControls.connecting) return;
+  pause();
+  let preferences;
+  try {
+    randomizeBitrate();
+    preferences = exportPreferences();
+  } catch (error) { setMessage(error.message, true); return; }
+  if (isCloud()) { await startCloudRender(preferences); return; }
+  state.busy = true;
+  state.cancelRequested = false;
+  clearDownload();
+  queue.reset();
+  const usedOutputNames = new Set();
+  for (const job of state.jobs) job.outputName = uniqueOutputName(outputFileName(job.file.name, preferences), usedOutputNames);
+  updateControls();
+  $('progress').value = 0;
+  $('status').textContent = state.jobs.length > 1 ? 'Preparing render queue…' : 'Preparing export…';
+  $('encoding-details').textContent = encodingDetails(preferences);
+  const started = performance.now();
+  const usedBitrates = new Set([preferences.bitrate]);
+  let directory = null;
+  try {
+    // Open the picker while this click still has user activation, once per queue.
+    if (preferences.saveMode === 'disk') {
+      if (state.jobs.length > 1) {
+        directory = await showDirectoryPicker({ mode: 'readwrite' });
+        checkCancelled();
+      } else {
+        const handle = await showSaveFilePicker({
+          suggestedName: state.jobs[0].outputName,
+          types: [{ description: preferences.format.toUpperCase() + ' video',
+            accept: { [preferences.format === 'mov' ? 'video/quicktime' : 'video/mp4']: ['.' + preferences.format] } }],
+        });
+        checkCancelled();
+        state.fileStream = await handle.createWritable();
+        checkCancelled();
+      }
+    }
+    const diskNames = new Set();
+    for (const job of state.jobs) {
+      checkCancelled();
+      const bitrate = job.index === 0 ? preferences.bitrate :
+        nextBitrate(preferences.bitrateMode, preferences.bitrate, [...usedBitrates, state.lastRenderBitrate]);
+      usedBitrates.add(bitrate);
+      await renderJob(job, preferences, bitrate, directory, diskNames);
+      checkCancelled();
+    }
+    if (state.jobs.length > 1) {
+      const completed = state.jobs.filter(job => job.status === 'completed');
+      const failed = state.jobs.filter(job => job.status === 'failed').length;
+      $('progress').value = 100;
+      $('status').textContent = 'Batch complete · ' + completed.length + ' completed · ' + failed + ' failed';
+      $('frame-stat').textContent = completed.length + ' / ' + state.jobs.length + ' files completed';
+      $('speed-stat').textContent = 'Completed in ' + durationText((performance.now() - started) / 1000);
+      $('eta-stat').textContent = sizeText(completed.reduce((sum, job) => sum + job.result.bytes, 0));
+      setMessage((directory ? 'Completed videos were saved to your chosen folder.' : 'Download completed videos from their rows below.') +
+        (failed ? ' Failed files show their error messages and can be corrected before rendering again.' : ' Every video passed the selected bitrate range.'));
+    }
+  } catch (error) {
+    const cancelled = state.cancelRequested || error.name === 'AbortError';
+    if (cancelled) {
+      for (const job of state.jobs) {
+        if (job.status === 'pending' || job.status === 'rendering') {
+          job.status = 'cancelled';
+          job.detail = 'Queue cancelled. This file was not completed.';
+          queue.update(job);
+        }
+      }
+    }
+    $('status').textContent = cancelled ? (state.jobs.length > 1 ? 'Queue cancelled' : 'Render cancelled') : 'Unable to start the render';
+    setMessage(cancelled ? 'Completed videos remain available below. Click Render to restart the selected files.' : error.message, !cancelled);
+  } finally {
+    await abortSave();
+    if (state.preparing) state.preparing.dispose();
+    if (state.exporting) state.exporting.dispose();
+    state.preparing = null;
+    state.exporting = null;
+    state.currentJob = null;
+    state.activeSettings = null;
+    state.busy = false;
+    updateControls();
+  }
+});
+
+$('cancel').addEventListener('click', async () => {
+  if (isCloud() && !state.repairing) { await cloudControls.cancel(); return; }
+  if (!state.busy) return;
+  state.cancelRequested = true;
+  if (state.repairing) state.repairing.abort();
+  if (state.preparing) state.preparing.dispose();
+  if (state.exporting) state.exporting.dispose();
+  $('cancel').disabled = true;
+});
+
+window.addEventListener('beforeunload', (event) => {
+  if (state.busy && !(isCloud() && state.cloudQueueJobId && cloudControls.accepted)) { event.preventDefault(); event.returnValue = ''; }
+});
+updateEngineNotes();
+updateBitrateMode();
+updateControls();
+cloudControls.init();

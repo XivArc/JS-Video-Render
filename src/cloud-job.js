@@ -1,0 +1,62 @@
+import { getBitrateProfile, validateTargetBitrate, nextBitrate } from './bitrate-profiles.js';
+import { FIXED_DURATIONS, MAX_EXTRA_SECONDS, validExtraSeconds } from './duration-settings.js';
+import { validateDimensions } from './render-settings.js';
+
+export const CLOUD_ACTIONS_URL = 'https://github.com/XivArc/JS-Video-Render/actions/workflows/render-cloud.yml';
+export const CLOUD_UPLOAD_URL = 'https://github.com/XivArc/JS-Video-Render/upload/main/cloud/jobs';
+export const MAX_CLOUD_JOB_BYTES = 20_000_000;
+const bytes = text => new TextEncoder().encode(text).length;
+
+export function validateCloudJob(job) {
+  if (!job || job.version !== 1 || typeof job.id !== 'string' || !/^cloud-[a-z0-9-]{1,70}$/.test(job.id)) {
+    throw new Error('Invalid cloud job format or identifier.');
+  }
+  const settings = job.settings;
+  if (!settings || !['mp4', 'mov'].includes(settings.format) || ![24, 25, 30, 50, 60].includes(settings.fps) ||
+      !['full', '2', '5', 'extend', ...FIXED_DURATIONS.map(String)].includes(settings.durationChoice)) {
+    throw new Error('Choose a supported format, frame rate, and duration.');
+  }
+  const extend = settings.durationChoice === 'extend';
+  if (extend && !validExtraSeconds(settings.extraSeconds)) {
+    throw new Error('Add 1–' + MAX_EXTRA_SECONDS + ' whole seconds to extend the timeline.');
+  }
+  if (extend && settings.endingBehavior !== undefined && !['smart', 'source'].includes(settings.endingBehavior)) {
+    throw new Error('Choose a supported ending behavior.');
+  }
+  if (settings.bitrateMode !== 'manual') getBitrateProfile(settings.bitrateMode);
+  let dimensions;
+  if (settings.resolution === 'native') dimensions = { resolution: 'native' };
+  else {
+    if (settings.resolution !== undefined && settings.resolution !== 'fixed') throw new Error('Invalid resolution mode.');
+    // Jobs prepared before independent resolution controls had no dimensions.
+    // Keep those queued jobs readable; new jobs always specify their size.
+    const legacy = settings.resolution === undefined && settings.width === undefined && settings.height === undefined;
+    const size = legacy ? getBitrateProfile(settings.bitrateMode) : settings;
+    dimensions = { resolution: 'fixed', ...validateDimensions(size.width, size.height) };
+  }
+  if (!Array.isArray(job.files) || job.files.length < 1 || job.files.length > 10) throw new Error('A cloud job must contain 1–10 JavaScript files.');
+  const files = job.files.map(file => {
+    if (!file || typeof file.fileName !== 'string' || !/\.js$/i.test(file.fileName) || file.fileName.length > 255 ||
+        /[\x00-\x1f]/.test(file.fileName) || typeof file.source !== 'string' || bytes(file.source) > 5_000_000) {
+      throw new Error('Each cloud source must be a .js file up to 5 MB.');
+    }
+    validateTargetBitrate(file.bitrate, settings.bitrateMode);
+    return { fileName: file.fileName, source: file.source, bitrate: file.bitrate };
+  });
+  const normalized = { version: 1, id: job.id, settings: {
+    format: settings.format, fps: settings.fps, durationChoice: settings.durationChoice, bitrateMode: settings.bitrateMode, ...dimensions,
+    ...(extend ? { extraSeconds: settings.extraSeconds, endingBehavior: settings.endingBehavior ?? 'source' } : {}),
+  }, files };
+  if (bytes(JSON.stringify(normalized)) > MAX_CLOUD_JOB_BYTES) throw new Error('The cloud job exceeds 20 MB. Select fewer files for this job.');
+  return normalized;
+}
+
+export function createCloudJob(preferences, sources) {
+  const used = [preferences.bitrate];
+  const files = sources.map((file, index) => {
+    const bitrate = index === 0 ? preferences.bitrate : nextBitrate(preferences.bitrateMode, preferences.bitrate, used);
+    used.push(bitrate);
+    return { fileName: file.fileName, source: file.source, bitrate };
+  });
+  return validateCloudJob({ version: 1, id: 'cloud-' + crypto.randomUUID(), settings: preferences, files });
+}
